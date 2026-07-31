@@ -1,0 +1,11 @@
+.env
+/bin/
+/tmp/
+*.log
+.DS_Store
+
+# docs/docs.go is intentionally NOT ignored: router.go imports it
+# (`_ "github.com/replypilot/backend/docs"`) for its side-effecting
+# swag.Register call, so it must exist for `go build` to succeed. A
+# committed placeholder ships with this repo; `make swagger` overwrites it
+# with the real generated spec — commit that regenerated version too.

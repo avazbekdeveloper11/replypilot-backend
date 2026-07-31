@@ -1,0 +1,136 @@
+# Local development stack only — production runs each of these as a
+# managed service (RDS/Cloud SQL, Elasticache/Memorystore, CloudAMQP or
+# equivalent), not as containers you operate yourself. See
+# docs/ARCHITECTURE.md §9.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16 # ships the pgvector extension the migrations need
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: replypilot
+      POSTGRES_PASSWORD: replypilot
+      POSTGRES_DB: replypilot
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # NOTE: the schema.sql initdb mount was intentionally removed. Schema is
+      # now owned by the versioned migrations run by the `migrate` service
+      # below — a single source of truth. Two mechanisms (initdb + migrate)
+      # would fight over an empty database.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U replypilot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    restart: unless-stopped
+    ports:
+      - "5672:5672"
+      - "15672:15672" # management UI: http://localhost:15672 (guest/guest)
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Runs migrations once, then exits. The api service waits for it to finish
+  # SUCCESSFULLY before starting, so the API never boots against an
+  # unmigrated (or half-migrated) database. Reuses the same image as the api
+  # — just a different entrypoint (/migrate, built alongside /api in the
+  # Dockerfile).
+  migrate:
+    build:
+      context: .
+      dockerfile: deployments/docker/Dockerfile
+    entrypoint: ["/migrate", "up"]
+    env_file: .env
+    environment:
+      DB_HOST: postgres
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      dockerfile: deployments/docker/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_HOST: postgres
+      REDIS_ADDR: redis:6379
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+    ports:
+      - "8080:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  # Consumes dm.received (published by `api`'s webhook receiver) and runs
+  # the AI reply pipeline — see cmd/worker-ai's doc comment. Without this
+  # service running, DMs are ingested and stored but the AI never replies
+  # to any of them; `api` alone is not the full product.
+  worker-ai:
+    build:
+      context: .
+      dockerfile: deployments/docker/Dockerfile
+    entrypoint: ["/worker-ai"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_HOST: postgres
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  # Runs one pass of cmd/token-refresh and exits — see that binary's doc
+  # comment. `docker compose up` runs this once alongside everything else,
+  # which is enough for local dev to prove it works end-to-end, but it is
+  # NOT a substitute for a real schedule: in production this must be
+  # invoked by an external scheduler (cron / a Kubernetes CronJob) on a
+  # recurring basis — a single run at stack startup does nothing for a
+  # token that's still healthy today but expires in three weeks. See
+  # backend/README.md's Instagram connect flow section.
+  token-refresh:
+    build:
+      context: .
+      dockerfile: deployments/docker/Dockerfile
+    entrypoint: ["/token-refresh"]
+    env_file: .env
+    environment:
+      DB_HOST: postgres
+    restart: "no"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
