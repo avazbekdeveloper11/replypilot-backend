@@ -1,0 +1,37 @@
+# syntax=docker/dockerfile:1
+#
+# Consumes `dm.received` (published by the `api` image's webhook receiver)
+# and runs the AI reply pipeline — see cmd/worker-ai's doc comment. Without
+# this deployed and running as its own process, Instagram DMs are ingested
+# and stored by `api` just fine, but the AI never replies to any of them;
+# `api` alone is not the full product.
+#
+# Same reasoning as Dockerfile.migrate: the main `api` image is distroless
+# (no shell), so Coolify can't `docker exec` an entrypoint override into it.
+# This variant bakes /worker-ai into the ENTRYPOINT itself — deploy this as
+# its own Coolify resource (same repo, this Dockerfile) alongside `backend`.
+# It runs, connects to RabbitMQ, and keeps consuming until stopped — this
+# is a long-running service, not a one-off job like migrate.
+
+# --- builder ---------------------------------------------------------------
+FROM golang:1.23-alpine AS builder
+
+RUN apk add --no-cache git ca-certificates
+
+WORKDIR /src
+
+COPY go.mod ./
+COPY go.su[m] ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/worker-ai ./cmd/worker-ai
+
+# --- runtime -----------------------------------------------------------------
+FROM gcr.io/distroless/static-debian12:nonroot AS runtime
+
+COPY --from=builder /out/worker-ai /worker-ai
+
+USER nonroot:nonroot
+
+ENTRYPOINT ["/worker-ai"]
