@@ -1,0 +1,35 @@
+# syntax=docker/dockerfile:1
+#
+# One-off migration runner for platforms without shell/exec access to the
+# main `api` image (it's distroless — no bash/sh, so Coolify's Terminal
+# and `docker exec` can't run `/migrate up` inside it). This variant bakes
+# `up` into the ENTRYPOINT itself: deploy this as its own Coolify resource
+# (same repo, this Dockerfile), it runs, applies pending migrations, exits
+# 0, and that's it — no shell needed anywhere. Re-deploy it any time new
+# migrations are added to internal/migrations/.
+
+# --- builder ---------------------------------------------------------------
+FROM golang:1.23-alpine AS builder
+
+RUN apk add --no-cache git ca-certificates
+
+WORKDIR /src
+
+COPY go.mod ./
+COPY go.su[m] ./
+RUN go mod download
+
+COPY . .
+# Only the migrate binary is needed here — internal/migrations/*.sql is
+# embedded into it (internal/migrations/embed.go), so this image needs
+# nothing else at runtime.
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/migrate ./cmd/migrate
+
+# --- runtime -----------------------------------------------------------------
+FROM gcr.io/distroless/static-debian12:nonroot AS runtime
+
+COPY --from=builder /out/migrate /migrate
+
+USER nonroot:nonroot
+
+ENTRYPOINT ["/migrate", "up"]
