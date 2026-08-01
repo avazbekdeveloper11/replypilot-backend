@@ -40,7 +40,15 @@ type GraphAPIClient interface {
 // webhookFields is the set of Instagram webhook fields ReplyPilot needs for
 // the DM pipeline. Kept minimal deliberately — subscribing to fields you
 // don't consume just adds noise to the webhook receiver.
-const webhookFields = "messages,messaging_seen,messaging_reactions,messaging_postbacks"
+//
+// NOTE: it's "message_reactions", not "messaging_reactions" — Meta's Graph
+// API rejects the latter with a 400 (IGApiException code 100), which made
+// SubscribeApp fail on every connect attempt with no visible error to the
+// user (see oauth_usecase.go's upsertAccount doc comment: a subscribe
+// failure isn't fatal to persistence, so the account still saves as
+// "connected" with webhook_subscribed=false — DMs got ingested nowhere,
+// and it looked exactly like "AI just isn't replying").
+const webhookFields = "messages,messaging_seen,message_reactions,messaging_postbacks"
 
 // StateStore persists the OAuth CSRF `state` between connect and callback.
 // Implemented by internal/repository/redis.OAuthStateStore.
