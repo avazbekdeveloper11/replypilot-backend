@@ -125,24 +125,55 @@ func (c *Client) RefreshLongLivedToken(ctx context.Context, currentToken string)
 	return result.AccessToken, time.Duration(result.ExpiresIn) * time.Second, nil
 }
 
+// profileResponse.UserID is the field that matters most here, and it is NOT
+// the same ID as the one /oauth/access_token hands back.
+//
+// Instagram API with Instagram Login has TWO distinct IDs per account:
+//
+//	app-scoped ID  — what the token exchange returns as "user_id"
+//	                 (e.g. 38336100095988690). Fine for Graph calls made
+//	                 with that same token, useless for anything else.
+//	IG Business ID — what `?fields=user_id` returns (e.g. 17841480194544442).
+//	                 This is the ID Meta puts in webhook `entry.id`.
+//
+// Storing the first one and then looking accounts up by webhook entry.id
+// (the second one) never matches — every incoming DM silently falls through
+// WebhookUseCase.ingestMessage's not-found branch and is dropped, with the
+// webhook still marked `processed`. Nothing errors, nothing logs, the AI
+// simply never replies. So FetchProfile resolves both and the caller
+// persists the IG Business ID.
+//
+// The number-vs-string quirk documented on shortLivedTokenResponse applies
+// here too: user_id comes back as a JSON number.
 type profileResponse struct {
 	Username string `json:"username"`
+	UserID   int64  `json:"user_id"`
 }
 
-// FetchProfile: GET {graphBase}/{ig-user-id}?fields=username
-func (c *Client) FetchProfile(ctx context.Context, accessToken, igUserID string) (string, error) {
-	u := fmt.Sprintf("%s/%s?fields=username&access_token=%s", c.graphBase, igUserID, url.QueryEscape(accessToken))
+// FetchProfile: GET {graphBase}/{ig-user-id}?fields=username,user_id
+//
+// Returns the username and the account's IG Business ID (the webhook-facing
+// one — see profileResponse's doc comment). igUserID may be the app-scoped
+// ID from the token exchange; `me` would work equally well here since the
+// token already scopes the request to one account.
+func (c *Client) FetchProfile(ctx context.Context, accessToken, igUserID string) (username, igBusinessID string, err error) {
+	u := fmt.Sprintf("%s/%s?fields=username,user_id&access_token=%s", c.graphBase, igUserID, url.QueryEscape(accessToken))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	var result profileResponse
 	if err := c.doJSON(req, &result); err != nil {
-		return "", err
+		return "", "", err
 	}
-	return result.Username, nil
+	if result.UserID == 0 {
+		// Defensive: an empty user_id would mean silently reintroducing the
+		// exact ID mismatch this method exists to prevent.
+		return "", "", fmt.Errorf("instagram profile response missing user_id for %s", igUserID)
+	}
+	return result.Username, strconv.FormatInt(result.UserID, 10), nil
 }
 
 type subscribedAppsResponse struct {

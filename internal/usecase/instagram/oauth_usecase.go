@@ -30,7 +30,12 @@ type GraphAPIClient interface {
 	// pkg not — internal/integration/metaapi doc comment for the refresh
 	// endpoint this pairs with).
 	ExchangeForLongLivedToken(ctx context.Context, shortLivedToken string) (accessToken string, expiresIn time.Duration, err error)
-	FetchProfile(ctx context.Context, accessToken, igUserID string) (username string, err error)
+	// FetchProfile returns the username AND the account's IG Business ID —
+	// the latter is what Meta puts in webhook `entry.id`, and is a
+	// DIFFERENT id from the app-scoped one ExchangeCodeForShortLivedToken
+	// returns. Persist the IG Business ID, or webhook lookups never match.
+	// See the method's doc comment in internal/integration/metaapi.
+	FetchProfile(ctx context.Context, accessToken, igUserID string) (username, igBusinessID string, err error)
 	// SubscribeApp subscribes the account to webhook fields — without it no
 	// DMs are ever delivered to the webhook receiver. See the method's doc
 	// comment in internal/integration/metaapi.
@@ -141,7 +146,11 @@ func (uc *OAuthUseCase) connect(ctx context.Context, orgID, connectedByUserID uu
 		return nil, apperror.Internal("exchange for long-lived token", err)
 	}
 
-	username, err := uc.graph.FetchProfile(ctx, longLived, igUserID)
+	// igUserID here is the app-scoped ID from the token exchange. It is good
+	// enough to address this Graph call (the token scopes it to one account),
+	// but it must NOT be what gets persisted: webhooks identify the account
+	// by its IG Business ID, so that's the one everything downstream keys on.
+	username, igBusinessID, err := uc.graph.FetchProfile(ctx, longLived, igUserID)
 	if err != nil {
 		return nil, apperror.Internal("fetch instagram profile", err)
 	}
@@ -157,13 +166,13 @@ func (uc *OAuthUseCase) connect(ctx context.Context, orgID, connectedByUserID uu
 	// hard-won token must not be lost) with webhook_subscribed=false, then
 	// surface the error so the caller knows the account is connected but not
 	// yet receiving DMs and can retry.
-	subscribeErr := uc.graph.SubscribeApp(ctx, longLived, igUserID, webhookFields)
+	subscribeErr := uc.graph.SubscribeApp(ctx, longLived, igBusinessID, webhookFields)
 
 	expiresAt := time.Now().Add(expiresIn)
 
 	account, err := uc.upsertAccount(ctx, upsertParams{
 		orgID:             orgID,
-		igUserID:          igUserID,
+		igUserID:          igBusinessID,
 		username:          username,
 		encryptedToken:    encryptedToken,
 		expiresAt:         expiresAt,
