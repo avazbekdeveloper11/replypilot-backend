@@ -143,11 +143,28 @@ func (c *Client) RefreshLongLivedToken(ctx context.Context, currentToken string)
 // simply never replies. So FetchProfile resolves both and the caller
 // persists the IG Business ID.
 //
-// The number-vs-string quirk documented on shortLivedTokenResponse applies
-// here too: user_id comes back as a JSON number.
+// The number-vs-string quirk documented on shortLivedTokenResponse shows up
+// here too, but INVERTED and inconsistently: /oauth/access_token returns
+// user_id as a bare JSON number, while {graphBase}/{id}?fields=user_id
+// returns the same logical field as a quoted string. Meta does not document
+// this difference and it is not stable enough to rely on either way, hence
+// flexibleID below rather than int64 or string.
 type profileResponse struct {
-	Username string `json:"username"`
-	UserID   int64  `json:"user_id"`
+	Username string     `json:"username"`
+	UserID   flexibleID `json:"user_id"`
+}
+
+// flexibleID unmarshals a JSON value that may be either a quoted string or a
+// bare number into a string, without caring which it was. Meta returns IDs
+// both ways across endpoints (see profileResponse), and a plain int64 field
+// fails outright on the string form:
+//
+//	json: cannot unmarshal string into Go struct field ... of type int64
+type flexibleID string
+
+func (f *flexibleID) UnmarshalJSON(b []byte) error {
+	*f = flexibleID(strings.Trim(string(b), `"`))
+	return nil
 }
 
 // FetchProfile: GET {graphBase}/{ig-user-id}?fields=username,user_id
@@ -168,12 +185,12 @@ func (c *Client) FetchProfile(ctx context.Context, accessToken, igUserID string)
 	if err := c.doJSON(req, &result); err != nil {
 		return "", "", err
 	}
-	if result.UserID == 0 {
+	if result.UserID == "" {
 		// Defensive: an empty user_id would mean silently reintroducing the
 		// exact ID mismatch this method exists to prevent.
 		return "", "", fmt.Errorf("instagram profile response missing user_id for %s", igUserID)
 	}
-	return result.Username, strconv.FormatInt(result.UserID, 10), nil
+	return result.Username, string(result.UserID), nil
 }
 
 type subscribedAppsResponse struct {
