@@ -36,18 +36,21 @@ const (
 	// hypothetical). gemini-embedding-001 is the current replacement per
 	// ai.google.dev/api/embeddings.
 	embeddingModel = "gemini-embedding-001"
-	// GenerationModel was "gemini-2.0-flash" until Google shut it down
-	// June 1, 2026 (confirmed live: a real request against it now 404s with
-	// "This model models/gemini-2.0-flash is no longer available"; caught
-	// in production when a customer's message got no reply — see the AI
-	// pipeline's error logs). gemini-2.5-flash is the current replacement.
-	// IMPORTANT: gemini-2.5-flash is itself scheduled for shutdown October
-	// 16, 2026, with gemini-3.5-flash as its replacement — this will need
-	// updating again before then. gemini-3.5-flash was available at time of
-	// writing but reported ~15x pricier per token than 2.0-flash was, so
-	// migrating early isn't free — worth checking actual gemini-3.5-flash
-	// pricing against usage volume before jumping straight to it.
-	GenerationModel = "gemini-2.5-flash"
+	// GenerationModel went through two dead ends before landing here, both
+	// confirmed live against this project's own API key, not assumed from
+	// docs:
+	//   "gemini-2.0-flash" -> 404 "no longer available" (Google shut it
+	//   down June 1, 2026).
+	//   "gemini-2.5-flash" -> 404 "no longer available to new users" (this
+	//   project's key was provisioned after Google cut off new access to
+	//   it, even though existing callers may still be grandfathered in —
+	//   don't be surprised if an older project's key behaves differently).
+	// "gemini-3.5-flash" is the current GA model and what's live-verified
+	// working as of this writing. It reportedly prices meaningfully higher
+	// per token than 2.0-flash did — worth checking actual usage cost after
+	// a few weeks live, but there was no cheaper GA alternative available
+	// to this key at fix time.
+	GenerationModel = "gemini-3.5-flash"
 	baseURL         = "https://generativelanguage.googleapis.com/v1beta"
 )
 
