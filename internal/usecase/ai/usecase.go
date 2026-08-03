@@ -1,8 +1,8 @@
 // Package ai is the AI reply pipeline's core logic: given an inbound
 // customer message, retrieve grounding context from the org's knowledge
-// base (RAG), decide whether the model has enough grounding to answer
-// confidently, generate a reply with Gemini if so, send it back to the
-// customer via Instagram, and record what happened.
+// base (RAG), generate a reply with Gemini, send it back to the customer
+// via Instagram, and record what happened. Every inbound message gets a
+// reply — see CONFIDENCE below for what changed and why.
 //
 // This is the "downstream AI-processing worker" internal/usecase/instagram's
 // webhook_usecase.go doc comment describes as living outside the API
@@ -15,28 +15,32 @@
 //	Gemini's generateContent API does not return a confidence score for a
 //	generation. What this usecase calls "confidence" is a heuristic proxy:
 //	the top RAG-retrieved chunk's cosine similarity to the customer's
-//	message. Below confidenceThreshold (or zero chunks retrieved — e.g. an
-//	empty knowledge base), the usecase hands the conversation off to a
-//	human WITHOUT calling Gemini at all, rather than generating a possibly
-//	ungrounded answer. This also means a genuinely empty knowledge base
-//	fails safe: every conversation hands off immediately instead of the AI
-//	guessing.
+//	message. It used to gate whether Gemini was called at all — below
+//	confidenceThreshold, the usecase handed the conversation to a human
+//	WITHOUT generating a reply. That produced no customer-visible response
+//	whatsoever for anything that wasn't a close textual match to the
+//	knowledge base — including plain "salom" — which is indistinguishable
+//	from the bot being broken and is not acceptable for a DM automation
+//	product ("AI mijozlarni hamma yozgan DMlariga javob berishi kerak").
+//	confidence is still computed and still stored on ai_responses (see
+//	HandleInboundMessage), but it no longer blocks generation. The
+//	anti-hallucination guardrail now lives entirely in
+//	systemPromptTemplate's instructions — answer only from context, and say
+//	so and offer a human follow-up rather than invent facts. Gemini decides
+//	per-message whether it has enough grounding for specifics; this usecase
+//	no longer makes that call up front from one cosine-similarity number.
 //
-// HANDOFF AND ai_responses — READ BEFORE ASSUMING EVERY HANDOFF IS LOGGED
+// HANDOFF AND ai_responses
 //
 //	ai_responses.message_id is a NOT NULL composite FK into the partitioned
 //	messages table (see migrations/000001's trade-off note) — a row here
-//	can only exist for an actual sent message. A low-confidence handoff
-//	produces no reply and therefore no message, so no ai_responses row is
-//	created for it either; only conversations.status flips to
-//	pending_human. Consequently DashboardAIPerformanceResponse's
-//	handoff_rate (computed from ai_responses.was_handoff_triggered)
-//	undercounts these "never even attempted" handoffs — it only reflects a
-//	handoff decided AFTER a reply was generated, which this pipeline
-//	currently never does (it decides handoff BEFORE generating). If that
-//	distinction matters for reporting later, add a dedicated handoff-events
-//	table rather than stretching ai_responses to cover a case its schema
-//	doesn't fit.
+//	can only exist for an actual sent message. handoff (see that method) is
+//	now reached only when Gemini itself fails or returns an empty
+//	completion — a true "could not produce anything to send" case, not a
+//	confidence judgment — so it stays rare, and ai_responses.was_handoff_triggered
+//	is repurposed to flag "replied below the grounding threshold" instead of
+//	"no reply was attempted." See HandleInboundMessage's WasHandoffTriggered
+//	assignment.
 package ai
 
 import (
@@ -194,10 +198,19 @@ func (uc *UseCase) HandleInboundMessage(ctx context.Context, ev InboundEvent) er
 		return err
 	}
 
+	// confidence is still computed and still recorded on the ai_responses row
+	// (see below) for reporting, but it no longer gates whether the AI
+	// replies at all. It used to: below confidenceThreshold skipped Gemini
+	// entirely and silently handed the conversation to a human, which meant
+	// a customer who just said "salom" got no reply whatsoever — indistinguishable
+	// from the bot being broken. A DM automation product cannot leave DMs
+	// unanswered. The actual anti-hallucination guardrail now lives entirely
+	// in systemPromptTemplate's instructions (answer only from context,
+	// admit when you don't know, never invent facts) — Gemini itself decides
+	// per-message whether it has enough grounding to give specifics or should
+	// just engage warmly and offer a human follow-up, rather than this
+	// usecase deciding that up front from a single cosine-similarity number.
 	confidence := topSimilarity(hits)
-	if confidence < confidenceThreshold {
-		return uc.handoff(ctx, conv)
-	}
 
 	systemPrompt := buildSystemPrompt(hits)
 	transcript := buildTranscript(history)
@@ -256,7 +269,12 @@ func (uc *UseCase) HandleInboundMessage(ctx context.Context, ev InboundEvent) er
 		PromptTokens:        usage.PromptTokens,
 		CompletionTokens:    usage.CompletionTokens,
 		ConfidenceScore:     &confidenceCopy,
-		WasHandoffTriggered: false,
+		// A reply was always sent now (see HandleInboundMessage's comment on
+		// why the hard handoff-before-generating gate was removed), so this
+		// no longer means "no reply was sent" — it flags "answered below the
+		// grounding threshold, worth a human spot-check" for
+		// DashboardAIPerformanceResponse's handoff_rate metric.
+		WasHandoffTriggered: confidence < confidenceThreshold,
 		LatencyMs:           &latencyCopy,
 	}
 	citations := citationsFromHits(hits)
@@ -356,15 +374,26 @@ func citationsFromHits(hits []repository.ChunkSearchResult) []*entity.AIResponse
 }
 
 // systemPromptTemplate keeps the persona/grounding instructions in one
-// place — a sales-agent tone deliberately, per this product's positioning
-// ("AI-powered Instagram DM Sales Agent"), not a generic support bot voice.
-const systemPromptTemplate = `You are ReplyPilot, an AI sales assistant replying to Instagram DMs on behalf of a business.
+// place — a senior sales-rep tone deliberately, per this product's
+// positioning ("AI-powered Instagram DM Sales Agent"), not a generic
+// support bot voice. It has to work with EMPTY context too (buildSystemPrompt
+// passes "(no context available)" when hits is empty, or when nothing
+// cleared confidenceThreshold — see the package doc comment on CONFIDENCE):
+// a greeting or small talk still gets a warm, human reply and a nudge
+// toward what the business sells, it just can't state specifics that
+// aren't grounded. That split (always engage vs. only state grounded
+// specifics) is what replaced the old hard confidence-gate handoff.
+const systemPromptTemplate = `You are the Instagram DM sales rep for this business — think of the tone of a sharp, senior salesperson/community manager who's great at DMs, not a generic support bot and not a robotic FAQ machine.
 
 Rules:
-- Answer ONLY using the context below. If the context doesn't contain the answer, say you'll have a team member follow up — never invent facts, prices, or policies.
+- Every message gets a real reply — never leave the customer hanging, even a bare "salom" or "hi" deserves a warm, genuine response.
+- State specific facts (prices, hours, policies, stock, delivery times, etc.) ONLY from the context below. Never invent, estimate, or guess a specific fact that isn't in it.
+- If the customer asks something specific the context doesn't cover, don't just say "I don't know" — acknowledge what they asked, say a team member will follow up with the exact details, and keep the conversation warm and moving (e.g. ask a clarifying question, or highlight something you DO know that's relevant).
+- If there's little or no relevant context (a greeting, small talk, or an off-topic message), don't wait for a "real question" — greet them back like a person would, show genuine interest, and naturally invite them to share what they're looking for. This is where a good sales rep builds rapport, not where the bot goes silent.
 - Keep replies short and conversational, like a real Instagram DM — not an email. A sentence or two, occasionally three.
-- Be warm and helpful, and look for a natural opening to move the conversation toward a sale (e.g. suggesting a next step), but never be pushy.
-- Do not mention that you are an AI, a language model, or that you're using "context" or "documents" — just answer naturally.
+- Always look for a natural, non-pushy opening to move the conversation toward a sale — a next step, a question that surfaces their need, or a relevant detail that creates interest.
+- Match the customer's language and tone (e.g. reply in Uzbek if they wrote in Uzbek).
+- Do not mention that you are an AI, a language model, or that you're using "context" or "documents" — just answer naturally, like a person on the team would.
 
 Context:
 %s`
