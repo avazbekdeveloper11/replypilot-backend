@@ -176,8 +176,28 @@ func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 }
 
 type generateRequest struct {
-	Contents         []generateContent `json:"contents"`
+	Contents          []generateContent `json:"contents"`
 	SystemInstruction *generateContent  `json:"systemInstruction,omitempty"`
+	GenerationConfig  *generationConfig `json:"generationConfig,omitempty"`
+}
+
+// generationConfig currently exists for exactly one field: thinkingConfig.
+// gemini-3.5-flash "thinks" by default even for a two-word DM reply — a
+// live test against this project's own key ("salom" in, a 15-token reply
+// out) reported usageMetadata.thoughtsTokenCount: 347, i.e. the hidden
+// reasoning cost was >20x the visible reply. That's pure latency and
+// spend with no benefit for a short, conversational DM reply (this isn't
+// a math/coding task), so thinkingBudget is forced to 0 in Generate.
+type generationConfig struct {
+	ThinkingConfig *thinkingConfig `json:"thinkingConfig,omitempty"`
+}
+
+// ThinkingBudget: 0 disables thinking outright, per
+// ai.google.dev/gemini-api/docs/thinking. If a future prompt genuinely
+// needs multi-step reasoning (not the case for this pipeline today), raise
+// this rather than removing it — don't just delete generationConfig.
+type thinkingConfig struct {
+	ThinkingBudget int `json:"thinkingBudget"`
 }
 
 type generateContent struct {
@@ -221,6 +241,9 @@ func (c *Client) Generate(ctx context.Context, systemPrompt, userMessage string)
 		Contents: []generateContent{
 			{Role: "user", Parts: []generateTextPart{{Text: userMessage}}},
 		},
+		// See generationConfig's doc comment: thinking is pure overhead for
+		// a short conversational DM reply.
+		GenerationConfig: &generationConfig{ThinkingConfig: &thinkingConfig{ThinkingBudget: 0}},
 	})
 	if err != nil {
 		return "", GenerateUsage{}, fmt.Errorf("marshal generate request: %w", err)
