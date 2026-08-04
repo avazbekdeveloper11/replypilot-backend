@@ -141,7 +141,7 @@ func New(cfg *config.Config) (*Container, error) {
 	authUseCase := authuc.New(orgRepo, userRepo, roleRepo, teamMemberRepo, tokens, refreshTokenStore, otpStore, emailNotifier)
 	orgUseCase := organizationuc.New(orgRepo)
 	oauthUseCase := instagramuc.NewOAuthUseCase(instagramAccountRepo, graphClient, oauthStateStore, encryptor, cfg.Meta.AppID, cfg.Meta.RedirectURL)
-	webhookUseCase := instagramuc.NewWebhookUseCase(webhookLogRepo, instagramAccountRepo, conversationRepo, messageRepo, publisher, graphClient, encryptor, cfg.Meta.AppSecret, cfg.Meta.WebhookVerifyToken)
+	webhookUseCase := instagramuc.NewWebhookUseCase(webhookLogRepo, instagramAccountRepo, conversationRepo, messageRepo, publisher, graphClient, encryptor, cfg.Meta.AppSecret, cfg.Meta.WebhookVerifyToken, logger)
 	conversationUseCase := conversationuc.New(conversationRepo, messageRepo)
 	dashboardUseCase := dashboarduc.New(dashboardRepo, conversationRepo, instagramAccountRepo)
 	teamUseCase := teamuc.New(teamMemberRepo, userRepo, roleRepo)

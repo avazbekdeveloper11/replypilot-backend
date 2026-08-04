@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/replypilot/backend/internal/domain/apperror"
 	"github.com/replypilot/backend/internal/domain/entity"
 	"github.com/replypilot/backend/internal/domain/repository"
@@ -55,6 +57,7 @@ type WebhookUseCase struct {
 	encryptor   *crypto.AESGCMEncryptor
 	appSecret   string
 	verifyToken string
+	logger      *zap.Logger
 }
 
 func NewWebhookUseCase(
@@ -67,6 +70,7 @@ func NewWebhookUseCase(
 	encryptor *crypto.AESGCMEncryptor,
 	appSecret string,
 	verifyToken string,
+	logger *zap.Logger,
 ) *WebhookUseCase {
 	return &WebhookUseCase{
 		logRepo:     logRepo,
@@ -78,6 +82,7 @@ func NewWebhookUseCase(
 		encryptor:   encryptor,
 		appSecret:   appSecret,
 		verifyToken: verifyToken,
+		logger:      logger,
 	}
 }
 
@@ -222,11 +227,24 @@ func (uc *WebhookUseCase) ingestMessage(ctx context.Context, igBusinessAccountID
 	// pre-existing conversation that predates this field to backfill it —
 	// after that first successful fetch CustomerUsername is set and this
 	// branch is skipped for good.
+	//
+	// Both failure points are logged at Warn (not silently dropped) — this
+	// used to swallow errors with no trace at all, which made "why is the
+	// username never showing up" undiagnosable from logs alone.
 	if (isNewConversation || conv.CustomerUsername == nil) && uc.profiles != nil {
-		if accessToken, decErr := uc.encryptor.Decrypt(account.AccessTokenEncrypted); decErr == nil {
-			if username, _, fetchErr := uc.profiles.FetchProfile(ctx, accessToken, m.Sender.ID); fetchErr == nil && username != "" {
-				conv.CustomerUsername = &username
-			}
+		if accessToken, decErr := uc.encryptor.Decrypt(account.AccessTokenEncrypted); decErr != nil {
+			uc.logger.Warn("resolve customer IG username: decrypt account access token failed",
+				zap.String("instagram_account_id", account.ID.String()),
+				zap.Error(decErr),
+			)
+		} else if username, _, fetchErr := uc.profiles.FetchProfile(ctx, accessToken, m.Sender.ID); fetchErr != nil {
+			uc.logger.Warn("resolve customer IG username: FetchProfile failed",
+				zap.String("instagram_account_id", account.ID.String()),
+				zap.String("sender_igsid", m.Sender.ID),
+				zap.Error(fetchErr),
+			)
+		} else if username != "" {
+			conv.CustomerUsername = &username
 		}
 	}
 
