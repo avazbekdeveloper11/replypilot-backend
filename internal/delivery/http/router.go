@@ -30,6 +30,8 @@ type Handlers struct {
 	Analytics    *v1.AnalyticsHandler
 	User         *v1.UserHandler
 	Admin        *v1.AdminHandler
+	Product      *v1.ProductHandler
+	Click        *v1.ClickHandler
 }
 
 // Middlewares bundles the gin.HandlerFuncs that need constructed
@@ -146,6 +148,15 @@ func NewRouter(h Handlers, mw Middlewares) *gin.Engine {
 			protected.GET("/analytics/response-time", h.Analytics.ResponseTime)
 			protected.GET("/analytics/ai-usage", h.Analytics.AIUsage)
 			protected.GET("/analytics/conversation-outcomes", h.Analytics.ConversationOutcomes)
+
+			protected.GET("/products", h.Product.List)
+			protected.POST("/products", h.Product.Create)
+			protected.PATCH("/products/:id", h.Product.Update)
+			protected.DELETE("/products/:id", h.Product.Delete)
+
+			protected.GET("/integrations/click", h.Click.Get)
+			protected.POST("/integrations/click/connect", h.Click.Connect)
+			protected.POST("/integrations/click/disconnect", h.Click.Disconnect)
 
 			// Cross-tenant by design — gated by RequirePlatformAdmin on top
 			// of the same Auth+RateLimitByOrg every other protected route

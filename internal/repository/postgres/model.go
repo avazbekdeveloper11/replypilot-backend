@@ -259,3 +259,32 @@ type SubscriptionModel struct {
 }
 
 func (SubscriptionModel) TableName() string { return "subscriptions" }
+
+type ProductModel struct {
+	ID             uuid.UUID      `gorm:"column:id;type:uuid;primaryKey"`
+	OrganizationID uuid.UUID      `gorm:"column:organization_id;type:uuid"`
+	Name           string         `gorm:"column:name"`
+	Description    *string        `gorm:"column:description"`
+	PriceCents     int64          `gorm:"column:price_cents"`
+	Currency       string         `gorm:"column:currency"`
+	IsActive       bool           `gorm:"column:is_active"`
+	CreatedAt      time.Time      `gorm:"column:created_at"`
+	UpdatedAt      time.Time      `gorm:"column:updated_at"`
+	DeletedAt      gorm.DeletedAt `gorm:"column:deleted_at;index"`
+}
+
+func (ProductModel) TableName() string { return "products" }
+
+type ClickIntegrationModel struct {
+	ID                uuid.UUID      `gorm:"column:id;type:uuid;primaryKey"`
+	OrganizationID    uuid.UUID      `gorm:"column:organization_id;type:uuid"`
+	MerchantID        string         `gorm:"column:merchant_id"`
+	ServiceID         string         `gorm:"column:service_id"`
+	MerchantUserID    *string        `gorm:"column:merchant_user_id"`
+	ConnectedByUserID *uuid.UUID     `gorm:"column:connected_by_user_id;type:uuid"`
+	CreatedAt         time.Time      `gorm:"column:created_at"`
+	UpdatedAt         time.Time      `gorm:"column:updated_at"`
+	DeletedAt         gorm.DeletedAt `gorm:"column:deleted_at;index"`
+}
+
+func (ClickIntegrationModel) TableName() string { return "click_integrations" }

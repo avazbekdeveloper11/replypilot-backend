@@ -42,11 +42,13 @@ import (
 	adminuc "github.com/replypilot/backend/internal/usecase/admin"
 	analyticsuc "github.com/replypilot/backend/internal/usecase/analytics"
 	billinguc "github.com/replypilot/backend/internal/usecase/billing"
+	clickuc "github.com/replypilot/backend/internal/usecase/click"
 	dashboarduc "github.com/replypilot/backend/internal/usecase/dashboard"
 	instagramuc "github.com/replypilot/backend/internal/usecase/instagram"
 	knowledgebaseuc "github.com/replypilot/backend/internal/usecase/knowledgebase"
 	organizationuc "github.com/replypilot/backend/internal/usecase/organization"
 	platformsettingsuc "github.com/replypilot/backend/internal/usecase/platformsettings"
+	productuc "github.com/replypilot/backend/internal/usecase/product"
 	teamuc "github.com/replypilot/backend/internal/usecase/team"
 	useruc "github.com/replypilot/backend/internal/usecase/user"
 	"github.com/replypilot/backend/pkg/crypto"
@@ -124,6 +126,8 @@ func New(cfg *config.Config) (*Container, error) {
 	analyticsRepo := postgresrepo.NewAnalyticsRepository(db)
 	adminRepo := postgresrepo.NewAdminRepository(db)
 	platformSettingsRepo := postgresrepo.NewPlatformSettingsRepository(db)
+	productRepo := postgresrepo.NewProductRepository(db)
+	clickIntegrationRepo := postgresrepo.NewClickIntegrationRepository(db)
 	refreshTokenStore := redisrepo.NewRefreshTokenStore(redisClient)
 	oauthStateStore := redisrepo.NewOAuthStateStore(redisClient)
 	otpStore := redisrepo.NewOTPStore(redisClient)
@@ -159,6 +163,8 @@ func New(cfg *config.Config) (*Container, error) {
 	userUseCase := useruc.New(userRepo)
 	adminUseCase := adminuc.New(adminRepo, orgRepo)
 	platformSettingsUseCase := platformsettingsuc.New(platformSettingsRepo, encryptor)
+	productUseCase := productuc.New(productRepo)
+	clickUseCase := clickuc.New(clickIntegrationRepo)
 
 	// --- handlers ---
 	handlers := httpserver.Handlers{
@@ -174,6 +180,8 @@ func New(cfg *config.Config) (*Container, error) {
 		Analytics:    v1.NewAnalyticsHandler(analyticsUseCase),
 		User:         v1.NewUserHandler(userUseCase),
 		Admin:        v1.NewAdminHandler(adminUseCase, platformSettingsUseCase),
+		Product:      v1.NewProductHandler(productUseCase),
+		Click:        v1.NewClickHandler(clickUseCase),
 	}
 
 	// --- middlewares ---

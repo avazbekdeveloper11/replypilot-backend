@@ -55,6 +55,7 @@ import (
 	"github.com/replypilot/backend/internal/domain/apperror"
 	"github.com/replypilot/backend/internal/domain/entity"
 	"github.com/replypilot/backend/internal/domain/repository"
+	"github.com/replypilot/backend/internal/integration/clickapi"
 	"github.com/replypilot/backend/internal/integration/geminiapi"
 	"github.com/replypilot/backend/pkg/crypto"
 )
@@ -93,6 +94,23 @@ type Sender interface {
 	SendMessage(ctx context.Context, accessToken, recipientIGID, text string) error
 }
 
+// ProductLister is the narrow port onto the org's price catalog — satisfied
+// by repository.ProductRepository, which this usecase needs no other
+// method from. See buildProductContext.
+type ProductLister interface {
+	ListActiveByOrganization(ctx context.Context, orgID uuid.UUID) ([]*entity.Product, error)
+}
+
+// ClickIntegrationLookup is the narrow port onto whether/how the org has
+// connected Click — satisfied by repository.ClickIntegrationRepository.
+// FindByOrganization returning apperror.CodeNotFound is the expected,
+// common case (most orgs haven't connected Click) — see
+// buildProductContext, which treats that exactly like "no integration",
+// not an error worth failing the whole reply over.
+type ClickIntegrationLookup interface {
+	FindByOrganization(ctx context.Context, orgID uuid.UUID) (*entity.ClickIntegration, error)
+}
+
 // authError is satisfied by a Sender error that can identify itself as a
 // Meta authentication failure (an invalid, expired, or revoked access
 // token) — metaapi.GraphAPIError implements this for Graph API error code
@@ -119,6 +137,8 @@ type UseCase struct {
 	generator   Generator
 	sender      Sender
 	encryptor   *crypto.AESGCMEncryptor
+	products    ProductLister
+	click       ClickIntegrationLookup
 }
 
 func New(
@@ -130,6 +150,8 @@ func New(
 	generator Generator,
 	sender Sender,
 	encryptor *crypto.AESGCMEncryptor,
+	products ProductLister,
+	click ClickIntegrationLookup,
 ) *UseCase {
 	return &UseCase{
 		convRepo:    convRepo,
@@ -140,6 +162,8 @@ func New(
 		generator:   generator,
 		sender:      sender,
 		encryptor:   encryptor,
+		products:    products,
+		click:       click,
 	}
 }
 
@@ -212,7 +236,8 @@ func (uc *UseCase) HandleInboundMessage(ctx context.Context, ev InboundEvent) er
 	// usecase deciding that up front from a single cosine-similarity number.
 	confidence := topSimilarity(hits)
 
-	systemPrompt := buildSystemPrompt(hits)
+	productContext := uc.buildProductContext(ctx, ev.OrganizationID, ev.ConversationID)
+	systemPrompt := buildSystemPrompt(hits, productContext)
 	transcript := buildTranscript(history)
 
 	start := time.Now()
@@ -394,22 +419,109 @@ Rules:
 - Always look for a natural, non-pushy opening to move the conversation toward a sale — a next step, a question that surfaces their need, or a relevant detail that creates interest.
 - Match the customer's language and tone (e.g. reply in Uzbek if they wrote in Uzbek).
 - Do not mention that you are an AI, a language model, or that you're using "context" or "documents" — just answer naturally, like a person on the team would.
+- Payment links are dangerous to get wrong: only ever send a URL that appears character-for-character in the "Products" section below. NEVER type out, construct, guess, modify, or shorten a payment link yourself, even partially — copy it exactly or don't send one. If a customer wants to pay for something that either isn't in the Products list, or is listed there WITHOUT a payment link, do not invent one — tell them warmly that a team member will send payment details shortly.
+
+Products:
+%s
 
 Context:
 %s`
 
-func buildSystemPrompt(hits []repository.ChunkSearchResult) string {
-	if len(hits) == 0 {
-		return fmt.Sprintf(systemPromptTemplate, "(no context available)")
-	}
-	var b strings.Builder
-	for i, h := range hits {
-		if i > 0 {
-			b.WriteString("\n---\n")
+func buildSystemPrompt(hits []repository.ChunkSearchResult, productContext string) string {
+	context := "(no context available)"
+	if len(hits) > 0 {
+		var b strings.Builder
+		for i, h := range hits {
+			if i > 0 {
+				b.WriteString("\n---\n")
+			}
+			b.WriteString(h.Chunk.Content)
 		}
-		b.WriteString(h.Chunk.Content)
+		context = b.String()
 	}
-	return fmt.Sprintf(systemPromptTemplate, b.String())
+	if productContext == "" {
+		productContext = "(this business has no products listed yet)"
+	}
+	return fmt.Sprintf(systemPromptTemplate, productContext, context)
+}
+
+// buildProductContext is the structured (non-RAG) counterpart to the
+// embedding-retrieved hits above — see entity.Product's doc comment on why
+// a compact price catalog is enumerated directly rather than hoping the
+// right chunk gets retrieved. Best-effort like the username-resolve block
+// in instagram.WebhookUseCase: a lookup failure here must not block the
+// reply, so both repo calls swallow their own errors (returning "" falls
+// through to buildSystemPrompt's "(this business has no products listed
+// yet)" placeholder — the safe, conservative default that also happens to
+// satisfy "don't offer a payment link" when something's actually wrong).
+//
+// Caps at maxProductsInPrompt so a large catalog can't blow up prompt size
+// or cost — real pagination/relevance-ranking for bigger catalogs is a
+// follow-up, not needed for an MVP-sized shop.
+func (uc *UseCase) buildProductContext(ctx context.Context, orgID, conversationID uuid.UUID) string {
+	if uc.products == nil {
+		return ""
+	}
+	products, err := uc.products.ListActiveByOrganization(ctx, orgID)
+	if err != nil || len(products) == 0 {
+		return ""
+	}
+	if len(products) > maxProductsInPrompt {
+		products = products[:maxProductsInPrompt]
+	}
+
+	var clickIntegration *entity.ClickIntegration
+	if uc.click != nil {
+		if ci, err := uc.click.FindByOrganization(ctx, orgID); err == nil {
+			clickIntegration = ci
+		}
+	}
+
+	var b strings.Builder
+	for i, p := range products {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		fmt.Fprintf(&b, "- %s — %s so'm", p.Name, formatSom(p.PriceCents))
+		if p.Description != nil && strings.TrimSpace(*p.Description) != "" {
+			fmt.Fprintf(&b, " (%s)", strings.TrimSpace(*p.Description))
+		}
+		if clickIntegration != nil {
+			link := clickapi.BuildPaymentLink(clickapi.PaymentLinkInput{
+				MerchantID:       clickIntegration.MerchantID,
+				ServiceID:        clickIntegration.ServiceID,
+				MerchantUserID:   derefOr(clickIntegration.MerchantUserID, ""),
+				Amount:           clickapi.FormatAmount(p.PriceCents),
+				TransactionParam: conversationID.String() + "-" + p.ID.String(),
+			})
+			fmt.Fprintf(&b, "\n  Payment link (send this EXACT text if they want to buy this): %s", link)
+		}
+	}
+	return b.String()
+}
+
+// maxProductsInPrompt bounds buildProductContext — see its doc comment.
+const maxProductsInPrompt = 50
+
+// formatSom renders a price_cents integer (tiyin) as a plain so'm string
+// with no decimals shown when the tiyin part is zero — "150000" not
+// "150000.00" — since UZS retail prices are essentially never quoted with
+// sub-so'm precision in a DM. Falls back to showing the tiyin remainder
+// when it's non-zero rather than silently truncating it.
+func formatSom(priceCents int64) string {
+	som := priceCents / 100
+	remainder := priceCents % 100
+	if remainder == 0 {
+		return fmt.Sprintf("%d", som)
+	}
+	return fmt.Sprintf("%d.%02d", som, remainder)
+}
+
+func derefOr(s *string, fallback string) string {
+	if s == nil {
+		return fallback
+	}
+	return *s
 }
 
 // buildTranscript turns the last few turns (newest-first, per

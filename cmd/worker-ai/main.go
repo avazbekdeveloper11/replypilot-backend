@@ -93,6 +93,8 @@ func run() error {
 	knowledgeDocRepo := postgresrepo.NewKnowledgeDocumentRepository(db)
 	knowledgeChunkRepo := postgresrepo.NewKnowledgeChunkRepository(db)
 	platformSettingsRepo := postgresrepo.NewPlatformSettingsRepository(db)
+	productRepo := postgresrepo.NewProductRepository(db)
+	clickIntegrationRepo := postgresrepo.NewClickIntegrationRepository(db)
 
 	// --- integrations ---
 	geminiClient := geminiapi.NewClient(cfg.Gemini.APIKey)
@@ -105,7 +107,7 @@ func run() error {
 	// still needs both repositories since New() doesn't offer a
 	// retrieval-only constructor.
 	knowledgeUseCase := knowledgebaseuc.New(knowledgeDocRepo, knowledgeChunkRepo, geminiClient)
-	aiUseCase := aiuc.New(convRepo, msgRepo, accountRepo, aiRespRepo, knowledgeUseCase, geminiClient, metaClient, encryptor)
+	aiUseCase := aiuc.New(convRepo, msgRepo, accountRepo, aiRespRepo, knowledgeUseCase, geminiClient, metaClient, encryptor, productRepo, clickIntegrationRepo)
 	platformSettingsUseCase := platformsettingsuc.New(platformSettingsRepo, encryptor)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

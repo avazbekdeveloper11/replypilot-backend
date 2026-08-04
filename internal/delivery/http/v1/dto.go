@@ -132,6 +132,52 @@ type KnowledgeDocumentResponse struct {
 	CreatedAt    string  `json:"created_at"`
 }
 
+// ProductResponse mirrors entity.Product for the dashboard's Products page.
+// PriceCents stays in the smallest currency unit here too — the frontend
+// formats it for display the same way it already formats
+// PlanResponse.PriceMonthlyCents, no new formatting convention introduced.
+type ProductResponse struct {
+	ID          string  `json:"id"`
+	Name        string  `json:"name"`
+	Description *string `json:"description,omitempty"`
+	PriceCents  int64   `json:"price_cents"`
+	Currency    string  `json:"currency"`
+	IsActive    bool    `json:"is_active"`
+	CreatedAt   string  `json:"created_at"`
+}
+
+type CreateProductRequest struct {
+	Name        string  `json:"name" binding:"required,min=1,max=200"`
+	Description *string `json:"description" binding:"omitempty,max=2000"`
+	PriceCents  int64   `json:"price_cents" binding:"required,min=1"`
+	Currency    string  `json:"currency" binding:"omitempty,len=3"`
+}
+
+type UpdateProductRequest struct {
+	Name        string  `json:"name" binding:"required,min=1,max=200"`
+	Description *string `json:"description" binding:"omitempty,max=2000"`
+	PriceCents  int64   `json:"price_cents" binding:"required,min=1"`
+	Currency    string  `json:"currency" binding:"omitempty,len=3"`
+	IsActive    bool    `json:"is_active"`
+}
+
+// ClickIntegrationResponse never includes anything secret — merchant_id and
+// service_id are Click's own public identifiers (see
+// entity.ClickIntegration's doc comment), safe to round-trip to the
+// dashboard as-is so the settings card can show what's currently connected.
+type ClickIntegrationResponse struct {
+	MerchantID     string  `json:"merchant_id"`
+	ServiceID      string  `json:"service_id"`
+	MerchantUserID *string `json:"merchant_user_id,omitempty"`
+	ConnectedAt    string  `json:"connected_at"`
+}
+
+type ConnectClickRequest struct {
+	MerchantID     string  `json:"merchant_id" binding:"required"`
+	ServiceID      string  `json:"service_id" binding:"required"`
+	MerchantUserID *string `json:"merchant_user_id"`
+}
+
 type PlanResponse struct {
 	Code              string         `json:"code"`
 	Name              string         `json:"name"`
