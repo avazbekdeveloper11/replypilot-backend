@@ -8,6 +8,7 @@ import (
 	"github.com/replypilot/backend/internal/domain/apperror"
 	"github.com/replypilot/backend/internal/domain/entity"
 	"github.com/replypilot/backend/internal/domain/repository"
+	"github.com/replypilot/backend/pkg/crypto"
 	"github.com/replypilot/backend/pkg/signature"
 )
 
@@ -16,6 +17,17 @@ import (
 // concrete adapter is internal/platform/queue.Publisher (RabbitMQ).
 type EventPublisher interface {
 	Publish(ctx context.Context, routingKey string, payload any) error
+}
+
+// ProfileFetcher is the narrow port onto Meta's Graph API needed to
+// resolve a customer's Instagram username from their IGSID (the sender
+// ID a webhook delivery carries — Meta's messaging payload has no
+// username field, only that opaque ID). Satisfied by
+// internal/integration/metaapi.Client.FetchProfile, which this usecase
+// already needs no other method from — same narrow-interface pattern as
+// EventPublisher above and internal/usecase/ai.Sender.
+type ProfileFetcher interface {
+	FetchProfile(ctx context.Context, accessToken, igUserID string) (username, igBusinessID string, err error)
 }
 
 // RoutingKeyDMReceived is the event a downstream AI-processing worker
@@ -39,6 +51,8 @@ type WebhookUseCase struct {
 	convRepo    repository.ConversationRepository
 	messageRepo repository.MessageRepository
 	publisher   EventPublisher
+	profiles    ProfileFetcher
+	encryptor   *crypto.AESGCMEncryptor
 	appSecret   string
 	verifyToken string
 }
@@ -49,6 +63,8 @@ func NewWebhookUseCase(
 	convRepo repository.ConversationRepository,
 	messageRepo repository.MessageRepository,
 	publisher EventPublisher,
+	profiles ProfileFetcher,
+	encryptor *crypto.AESGCMEncryptor,
 	appSecret string,
 	verifyToken string,
 ) *WebhookUseCase {
@@ -58,6 +74,8 @@ func NewWebhookUseCase(
 		convRepo:    convRepo,
 		messageRepo: messageRepo,
 		publisher:   publisher,
+		profiles:    profiles,
+		encryptor:   encryptor,
 		appSecret:   appSecret,
 		verifyToken: verifyToken,
 	}
@@ -178,6 +196,7 @@ func (uc *WebhookUseCase) ingestMessage(ctx context.Context, igBusinessAccountID
 	}
 
 	conv, err := uc.convRepo.FindByAccountAndCustomer(ctx, account.OrganizationID, account.ID, m.Sender.ID)
+	isNewConversation := false
 	if err != nil {
 		if ae, ok := apperror.As(err); !ok || ae.Code != apperror.CodeNotFound {
 			return err
@@ -190,6 +209,24 @@ func (uc *WebhookUseCase) ingestMessage(ctx context.Context, igBusinessAccountID
 		}
 		if err := uc.convRepo.Create(ctx, conv); err != nil {
 			return err
+		}
+		isNewConversation = true
+	}
+
+	// Resolve the customer's Instagram username so the inbox shows a name
+	// instead of a bare numeric IGSID (m.Sender.ID) — the webhook payload
+	// itself never carries one (see ProfileFetcher's doc comment). Best
+	// effort: a lookup failure (rate limit, transient Graph API error)
+	// must not block message ingestion, so it's logged-and-swallowed, not
+	// returned. Runs on every new conversation, and once more per
+	// pre-existing conversation that predates this field to backfill it —
+	// after that first successful fetch CustomerUsername is set and this
+	// branch is skipped for good.
+	if (isNewConversation || conv.CustomerUsername == nil) && uc.profiles != nil {
+		if accessToken, decErr := uc.encryptor.Decrypt(account.AccessTokenEncrypted); decErr == nil {
+			if username, _, fetchErr := uc.profiles.FetchProfile(ctx, accessToken, m.Sender.ID); fetchErr == nil && username != "" {
+				conv.CustomerUsername = &username
+			}
 		}
 	}
 
