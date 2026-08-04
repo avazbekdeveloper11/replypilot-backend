@@ -26,6 +26,7 @@ type Config struct {
 	Stripe    StripeConfig
 	Security  SecurityConfig
 	RateLimit RateLimitConfig
+	Email     EmailConfig
 }
 
 type AppConfig struct {
@@ -106,6 +107,21 @@ type SecurityConfig struct {
 	TokenEncryptionKey string
 }
 
+// EmailConfig holds Resend's API key and the verified sender identity —
+// same "boots without it, individual calls fail with a clear error"
+// philosophy as GeminiConfig/StripeConfig, not mustGetEnv. When
+// ResendAPIKey is empty, internal/di/container.go wires
+// notify.LogNotifier instead of notify.ResendNotifier, so
+// registration/password-reset codes still work locally (logged, not
+// emailed) without this being configured.
+type EmailConfig struct {
+	ResendAPIKey string
+	// FromEmail must be on a domain verified in the Resend dashboard
+	// (SPF/DKIM) — see internal/integration/resendapi's package doc
+	// comment. Format: "Name <noreply@yourdomain.com>" or a bare address.
+	FromEmail string
+}
+
 // RateLimitConfig has one field, not a token-bucket burst/rate pair,
 // because middleware.RateLimiter implements a fixed-window counter (see
 // its doc comment for why that's the right tradeoff here). Add a Burst
@@ -172,6 +188,10 @@ func Load() (*Config, error) {
 		},
 		RateLimit: RateLimitConfig{
 			RequestsPerMinute: getEnvAsInt("RATE_LIMIT_RPM", 120),
+		},
+		Email: EmailConfig{
+			ResendAPIKey: getEnv("RESEND_API_KEY", ""),
+			FromEmail:    getEnv("RESEND_FROM_EMAIL", ""),
 		},
 	}
 

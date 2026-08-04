@@ -12,6 +12,13 @@ type RegisterRequest struct {
 	FullName         string `json:"full_name" binding:"required,min=2,max=120"`
 	Email            string `json:"email" binding:"required,email"`
 	Password         string `json:"password" binding:"required,min=8,max=72"`
+	// Code is the 6-digit code sent to Email by POST /auth/register/code —
+	// registration fails without it (see auth.UseCase.Register).
+	Code string `json:"code" binding:"required,len=6"`
+}
+
+type RequestRegistrationCodeRequest struct {
+	Email string `json:"email" binding:"required,email"`
 }
 
 type LoginRequest struct {
@@ -42,7 +49,8 @@ type ForgotPasswordRequest struct {
 }
 
 type ResetPasswordRequest struct {
-	Token       string `json:"token" binding:"required"`
+	Email       string `json:"email" binding:"required,email"`
+	Code        string `json:"code" binding:"required,len=6"`
 	NewPassword string `json:"new_password" binding:"required,min=8,max=72"`
 }
 

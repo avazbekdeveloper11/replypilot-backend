@@ -27,6 +27,7 @@ import (
 	v1 "github.com/replypilot/backend/internal/delivery/http/v1"
 	"github.com/replypilot/backend/internal/integration/geminiapi"
 	"github.com/replypilot/backend/internal/integration/metaapi"
+	"github.com/replypilot/backend/internal/integration/resendapi"
 	"github.com/replypilot/backend/internal/integration/stripeapi"
 	"github.com/replypilot/backend/internal/platform/cache"
 	"github.com/replypilot/backend/internal/platform/database"
@@ -117,19 +118,27 @@ func New(cfg *config.Config) (*Container, error) {
 	platformSettingsRepo := postgresrepo.NewPlatformSettingsRepository(db)
 	refreshTokenStore := redisrepo.NewRefreshTokenStore(redisClient)
 	oauthStateStore := redisrepo.NewOAuthStateStore(redisClient)
-	passwordResetStore := redisrepo.NewPasswordResetStore(redisClient)
+	otpStore := redisrepo.NewOTPStore(redisClient)
 
 	// --- integrations ---
 	graphClient := metaapi.NewClient(cfg.Meta.AppID, cfg.Meta.AppSecret, cfg.Meta.RedirectURL, cfg.Meta.GraphAPIBaseURL)
 	geminiClient := geminiapi.NewClient(cfg.Gemini.APIKey)
 	stripeClient := stripeapi.NewClient(cfg.Stripe.SecretKey)
 
-	// LogNotifier is a placeholder — this codebase has no email provider
-	// wired up. See its doc comment: do not ship it to production as-is.
-	passwordResetNotifier := notify.NewLogNotifier(logger)
+	// EmailSender: real delivery via Resend once RESEND_API_KEY is set,
+	// LogNotifier (logs instead of sending) otherwise — see EmailConfig's
+	// doc comment in internal/config. Do not run LogNotifier in
+	// production; see its own doc comment.
+	var emailNotifier notify.EmailSender
+	if cfg.Email.ResendAPIKey != "" {
+		resendClient := resendapi.NewClient(cfg.Email.ResendAPIKey, cfg.Email.FromEmail)
+		emailNotifier = notify.NewResendNotifier(resendClient)
+	} else {
+		emailNotifier = notify.NewLogNotifier(logger)
+	}
 
 	// --- usecases ---
-	authUseCase := authuc.New(orgRepo, userRepo, roleRepo, teamMemberRepo, tokens, refreshTokenStore, passwordResetStore, passwordResetNotifier, cfg.App.WebURL)
+	authUseCase := authuc.New(orgRepo, userRepo, roleRepo, teamMemberRepo, tokens, refreshTokenStore, otpStore, emailNotifier)
 	orgUseCase := organizationuc.New(orgRepo)
 	oauthUseCase := instagramuc.NewOAuthUseCase(instagramAccountRepo, graphClient, oauthStateStore, encryptor, cfg.Meta.AppID, cfg.Meta.RedirectURL)
 	webhookUseCase := instagramuc.NewWebhookUseCase(webhookLogRepo, instagramAccountRepo, conversationRepo, messageRepo, publisher, cfg.Meta.AppSecret, cfg.Meta.WebhookVerifyToken)

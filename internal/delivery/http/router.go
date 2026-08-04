@@ -82,6 +82,7 @@ func NewRouter(h Handlers, mw Middlewares) *gin.Engine {
 	v1Group := r.Group("/v1")
 	{
 		auth := v1Group.Group("/auth", mw.RateLimitByIP)
+		auth.POST("/register/code", h.Auth.RequestRegistrationCode)
 		auth.POST("/register", h.Auth.Register)
 		auth.GET("/organizations", h.Auth.ListOrganizations)
 		auth.POST("/login", h.Auth.Login)

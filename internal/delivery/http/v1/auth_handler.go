@@ -43,6 +43,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		FullName:         req.FullName,
 		Email:            req.Email,
 		Password:         req.Password,
+		Code:             req.Code,
 	})
 	if err != nil {
 		c.Error(err)
@@ -50,6 +51,31 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	}
 
 	response.Created(c, toAuthResponse(result))
+}
+
+// RequestRegistrationCode godoc
+// @Summary      Send a 6-digit email verification code for registration
+// @Description  Must be called before Register — Register rejects the request without a valid code. Ensures signups use a real, reachable email address.
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        request body RequestRegistrationCodeRequest true "Email to verify"
+// @Success      200 {object} response.Envelope
+// @Failure      409 {object} response.Envelope
+// @Router       /v1/auth/register/code [post]
+func (h *AuthHandler) RequestRegistrationCode(c *gin.Context) {
+	var req RequestRegistrationCodeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.Error(bindError(err))
+		return
+	}
+
+	if err := h.uc.RequestRegistrationCode(c.Request.Context(), req.Email); err != nil {
+		c.Error(err)
+		return
+	}
+
+	response.OK(c, gin.H{"message": "verification code sent"})
 }
 
 // Login godoc
@@ -170,12 +196,12 @@ func (h *AuthHandler) ListOrganizations(c *gin.Context) {
 }
 
 // ForgotPassword godoc
-// @Summary      Request a password reset link
-// @Description  Always returns 200 regardless of whether the email is registered — prevents using this endpoint to enumerate accounts. The link itself is currently logged server-side, not emailed (no email provider is wired up yet — see internal/platform/notify.LogNotifier).
+// @Summary      Request a password reset code
+// @Description  Always returns 200 regardless of whether the email is registered — prevents using this endpoint to enumerate accounts. Sends a 6-digit code via email (see internal/platform/notify.EmailSender) rather than a link.
 // @Tags         auth
 // @Accept       json
 // @Produce      json
-// @Param        request body ForgotPasswordRequest true "Email to send the reset link to"
+// @Param        request body ForgotPasswordRequest true "Email to send the reset code to"
 // @Success      200 {object} response.Envelope
 // @Router       /v1/auth/password/forgot [post]
 func (h *AuthHandler) ForgotPassword(c *gin.Context) {
@@ -190,15 +216,15 @@ func (h *AuthHandler) ForgotPassword(c *gin.Context) {
 		return
 	}
 
-	response.OK(c, gin.H{"message": "if an account exists for that email, a reset link has been sent"})
+	response.OK(c, gin.H{"message": "if an account exists for that email, a reset code has been sent"})
 }
 
 // ResetPassword godoc
-// @Summary      Set a new password using a reset token
+// @Summary      Set a new password using an emailed reset code
 // @Tags         auth
 // @Accept       json
 // @Produce      json
-// @Param        request body ResetPasswordRequest true "Reset token + new password"
+// @Param        request body ResetPasswordRequest true "Email + reset code + new password"
 // @Success      200 {object} response.Envelope
 // @Failure      401 {object} response.Envelope
 // @Router       /v1/auth/password/reset [post]
@@ -209,7 +235,7 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 		return
 	}
 
-	if err := h.uc.ResetPassword(c.Request.Context(), req.Token, req.NewPassword); err != nil {
+	if err := h.uc.ResetPassword(c.Request.Context(), req.Email, req.Code, req.NewPassword); err != nil {
 		c.Error(err)
 		return
 	}

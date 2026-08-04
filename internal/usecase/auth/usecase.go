@@ -14,8 +14,19 @@ import (
 	"github.com/replypilot/backend/internal/domain/apperror"
 	"github.com/replypilot/backend/internal/domain/entity"
 	"github.com/replypilot/backend/internal/domain/repository"
+	"github.com/replypilot/backend/internal/platform/notify"
 	"github.com/replypilot/backend/pkg/hash"
 	"github.com/replypilot/backend/pkg/jwtutil"
+	"github.com/replypilot/backend/pkg/otp"
+)
+
+// OTP purposes namespace codes issued by RequestRegistrationCode vs
+// ForgotPassword — see internal/repository/redis.OTPStore's doc comment
+// on why purpose+email keying matters (a code for one flow must not be
+// redeemable against the other).
+const (
+	otpPurposeRegister      = "register"
+	otpPurposeResetPassword = "password_reset"
 )
 
 // RefreshTokenStore allowlists issued refresh tokens so logout (or a future
@@ -28,21 +39,14 @@ type RefreshTokenStore interface {
 	Revoke(ctx context.Context, jti string) error
 }
 
-// PasswordResetStore holds single-use, short-lived tokens issued by
-// ForgotPassword and redeemed by ResetPassword. Implemented by
-// internal/repository/redis.PasswordResetStore — same GetDel-based
-// single-use shape as the OAuth CSRF state store.
-type PasswordResetStore interface {
-	Save(ctx context.Context, token string, userID uuid.UUID) error
-	Consume(ctx context.Context, token string) (uuid.UUID, bool, error)
-}
-
-// PasswordResetNotifier delivers the reset link to the user. Implemented
-// today by internal/platform/notify.LogNotifier (logs the link — no email
-// provider is wired up in this codebase yet; see that type's doc comment
-// before shipping this to real users).
-type PasswordResetNotifier interface {
-	Send(ctx context.Context, email, resetLink string) error
+// OTPStore holds short-lived, purpose+email-keyed verification codes
+// issued by RequestRegistrationCode and ForgotPassword, and redeemed by
+// Register and ResetPassword respectively. Implemented by
+// internal/repository/redis.OTPStore — see that type's doc comment for
+// the attempt-limiting and single-use semantics.
+type OTPStore interface {
+	Save(ctx context.Context, purpose, email, code string) error
+	Verify(ctx context.Context, purpose, email, code string) (bool, error)
 }
 
 type UseCase struct {
@@ -52,9 +56,8 @@ type UseCase struct {
 	memberRepo repository.TeamMemberRepository
 	tokens     *jwtutil.Manager
 	refresh    RefreshTokenStore
-	resetStore PasswordResetStore
-	notifier   PasswordResetNotifier
-	webURL     string
+	otpStore   OTPStore
+	notifier   notify.EmailSender
 }
 
 func New(
@@ -64,9 +67,8 @@ func New(
 	memberRepo repository.TeamMemberRepository,
 	tokens *jwtutil.Manager,
 	refresh RefreshTokenStore,
-	resetStore PasswordResetStore,
-	notifier PasswordResetNotifier,
-	webURL string,
+	otpStore OTPStore,
+	notifier notify.EmailSender,
 ) *UseCase {
 	return &UseCase{
 		orgRepo:    orgRepo,
@@ -75,9 +77,8 @@ func New(
 		memberRepo: memberRepo,
 		tokens:     tokens,
 		refresh:    refresh,
-		resetStore: resetStore,
+		otpStore:   otpStore,
 		notifier:   notifier,
-		webURL:     webURL,
 	}
 }
 
@@ -87,6 +88,11 @@ type RegisterInput struct {
 	FullName         string
 	Email            string
 	Password         string
+	// Code is the 6-digit code issued by RequestRegistrationCode to
+	// in.Email — required so registration only succeeds for an email the
+	// registrant actually controls (see package doc note in
+	// RequestRegistrationCode).
+	Code string
 }
 
 type LoginInput struct {
@@ -101,6 +107,45 @@ type Result struct {
 	AccessToken  string
 	RefreshToken string
 	ExpiresAt    time.Time
+}
+
+// RequestRegistrationCode sends a 6-digit verification code to email,
+// which Register then requires back as RegisterInput.Code. This is what
+// stops someone registering with a throwaway/mistyped/someone-else's
+// address — Register cannot succeed without proving control of the inbox
+// first (see user's explicit requirement: "userlar har xil emaildan
+// register qilib tashlamasdan haqiqiy emaillardan ro'yxatadn o'tishi
+// kerak").
+//
+// Deliberately does NOT reveal whether the email is already registered
+// via a different error — it returns the existing-account conflict
+// as-is, same as Register would, so the registration form's first
+// interaction is where that's surfaced, not silently different behavior
+// here that would need its own enumeration analysis.
+func (uc *UseCase) RequestRegistrationCode(ctx context.Context, email string) error {
+	if _, err := uc.userRepo.FindByEmail(ctx, email); err == nil {
+		return apperror.Conflict("an account with this email already exists")
+	} else if ae, ok := apperror.As(err); !ok || ae.Code != apperror.CodeNotFound {
+		return err
+	}
+
+	code, err := otp.Generate()
+	if err != nil {
+		return apperror.Internal("generate registration code", err)
+	}
+	if err := uc.otpStore.Save(ctx, otpPurposeRegister, email, code); err != nil {
+		return apperror.Internal("store registration code", err)
+	}
+
+	subject := "Your verification code"
+	html := fmt.Sprintf(
+		"<p>Your verification code is:</p><p style=\"font-size:24px;font-weight:bold;letter-spacing:4px\">%s</p><p>This code expires in 10 minutes. If you didn't request this, you can ignore this email.</p>",
+		code,
+	)
+	if err := uc.notifier.Send(ctx, email, subject, html); err != nil {
+		return apperror.Internal("send registration code", err)
+	}
+	return nil
 }
 
 // Register provisions a brand-new organization and its first user as
@@ -119,6 +164,14 @@ func (uc *UseCase) Register(ctx context.Context, in RegisterInput) (*Result, err
 		return nil, apperror.Conflict("organization slug already taken")
 	} else if ae, ok := apperror.As(err); !ok || ae.Code != apperror.CodeNotFound {
 		return nil, err
+	}
+
+	verified, err := uc.otpStore.Verify(ctx, otpPurposeRegister, in.Email, in.Code)
+	if err != nil {
+		return nil, apperror.Internal("verify registration code", err)
+	}
+	if !verified {
+		return nil, apperror.Unauthorized("invalid or expired verification code")
 	}
 
 	passwordHash, err := hash.Password(in.Password)
@@ -336,12 +389,12 @@ func (uc *UseCase) ListOrganizationsByEmail(ctx context.Context, email string) (
 	return memberships, nil
 }
 
-// ForgotPassword issues a single-use reset token and hands it to the
-// configured PasswordResetNotifier. It never returns an error for "no
-// such email" — the caller (handler) always responds with the same
-// generic "if that email exists, we sent a link" message regardless of
-// whether the account exists, so an attacker can't use this endpoint to
-// discover which emails are registered (the enumeration concern that
+// ForgotPassword issues a 6-digit verification code and hands it to the
+// configured notify.EmailSender. It never returns an error for "no such
+// email" — the caller (handler) always responds with the same generic "if
+// that email exists, we sent a code" message regardless of whether the
+// account exists, so an attacker can't use this endpoint to discover
+// which emails are registered (the enumeration concern that
 // ListOrganizationsByEmail deliberately does NOT worry about — different
 // endpoints, different threat models).
 func (uc *UseCase) ForgotPassword(ctx context.Context, email string) error {
@@ -356,22 +409,30 @@ func (uc *UseCase) ForgotPassword(ctx context.Context, email string) error {
 		return nil // same reasoning: don't reveal account state to the caller
 	}
 
-	token := uuid.NewString()
-	if err := uc.resetStore.Save(ctx, token, user.ID); err != nil {
-		return apperror.Internal("store password reset token", err)
+	code, err := otp.Generate()
+	if err != nil {
+		return apperror.Internal("generate password reset code", err)
+	}
+	if err := uc.otpStore.Save(ctx, otpPurposeResetPassword, user.Email, code); err != nil {
+		return apperror.Internal("store password reset code", err)
 	}
 
-	resetLink := fmt.Sprintf("%s/reset-password?token=%s", uc.webURL, token)
-	if err := uc.notifier.Send(ctx, user.Email, resetLink); err != nil {
+	subject := "Your password reset code"
+	html := fmt.Sprintf(
+		"<p>Your password reset code is:</p><p style=\"font-size:24px;font-weight:bold;letter-spacing:4px\">%s</p><p>This code expires in 10 minutes. If you didn't request this, you can ignore this email.</p>",
+		code,
+	)
+	if err := uc.notifier.Send(ctx, user.Email, subject, html); err != nil {
 		return apperror.Internal("send password reset notification", err)
 	}
 	return nil
 }
 
-// ResetPassword redeems a single-use token (issued by ForgotPassword) and
-// sets a new password. The token is consumed (GetDel) whether or not the
-// rest of this succeeds, once read — a token is one attempt, not a
-// standing credential to retry with.
+// ResetPassword redeems a code (issued by ForgotPassword to email) and
+// sets a new password. The code is consumed on successful match, and
+// discarded outright after too many wrong guesses — see
+// internal/repository/redis.OTPStore.Verify's doc comment for the
+// attempt-limiting behavior.
 //
 // Known scope limit, documented rather than silently skipped: this does
 // NOT revoke the user's other active refresh tokens/sessions. Doing that
@@ -380,18 +441,18 @@ func (uc *UseCase) ForgotPassword(ctx context.Context, email string) error {
 // individual JTIs, not indexed by user), which is a real follow-up but
 // wasn't in scope here. Until then, a stolen-and-then-reset account can
 // still be accessed via a refresh token issued before the reset.
-func (uc *UseCase) ResetPassword(ctx context.Context, token, newPassword string) error {
-	userID, ok, err := uc.resetStore.Consume(ctx, token)
+func (uc *UseCase) ResetPassword(ctx context.Context, email, code, newPassword string) error {
+	verified, err := uc.otpStore.Verify(ctx, otpPurposeResetPassword, email, code)
 	if err != nil {
-		return apperror.Internal("consume password reset token", err)
+		return apperror.Internal("verify password reset code", err)
 	}
-	if !ok {
-		return apperror.Unauthorized("invalid or expired reset link")
+	if !verified {
+		return apperror.Unauthorized("invalid or expired code")
 	}
 
-	user, err := uc.userRepo.FindByID(ctx, userID)
+	user, err := uc.userRepo.FindByEmail(ctx, email)
 	if err != nil {
-		return apperror.Unauthorized("invalid or expired reset link")
+		return apperror.Unauthorized("invalid or expired code")
 	}
 
 	passwordHash, err := hash.Password(newPassword)
