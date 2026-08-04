@@ -76,6 +76,14 @@ func New(cfg *config.Config) (*Container, error) {
 		return nil, fmt.Errorf("build logger: %w", err)
 	}
 
+	// Literal, greppable startup marker — no version/commit is logged
+	// anywhere else in this service, which made it impossible to confirm
+	// from runtime logs alone whether a given fix (e.g. the webhook
+	// username-resolve logging below) was actually the code running in
+	// production versus a stale/cached deploy. Bump the suffix any time
+	// you need a fresh, unambiguous "is this build actually live" check.
+	logger.Info("build marker: webhook-username-log-v2")
+
 	db, err := database.New(cfg.DB, gormLoggerFor(cfg.App.Env))
 	if err != nil {
 		return nil, fmt.Errorf("connect database: %w", err)

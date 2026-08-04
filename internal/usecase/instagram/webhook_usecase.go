@@ -231,20 +231,33 @@ func (uc *WebhookUseCase) ingestMessage(ctx context.Context, igBusinessAccountID
 	// Both failure points are logged at Warn (not silently dropped) — this
 	// used to swallow errors with no trace at all, which made "why is the
 	// username never showing up" undiagnosable from logs alone.
-	if (isNewConversation || conv.CustomerUsername == nil) && uc.profiles != nil {
+	shouldResolveUsername := (isNewConversation || conv.CustomerUsername == nil) && uc.profiles != nil
+	uc.logger.Info("resolve customer IG username: entering block",
+		zap.Bool("is_new_conversation", isNewConversation),
+		zap.Bool("customer_username_nil", conv.CustomerUsername == nil),
+		zap.Bool("profiles_configured", uc.profiles != nil),
+		zap.Bool("will_attempt", shouldResolveUsername),
+	)
+	if shouldResolveUsername {
 		if accessToken, decErr := uc.encryptor.Decrypt(account.AccessTokenEncrypted); decErr != nil {
 			uc.logger.Warn("resolve customer IG username: decrypt account access token failed",
 				zap.String("instagram_account_id", account.ID.String()),
 				zap.Error(decErr),
 			)
-		} else if username, _, fetchErr := uc.profiles.FetchProfile(ctx, accessToken, m.Sender.ID); fetchErr != nil {
+		} else if username, igBusinessID, fetchErr := uc.profiles.FetchProfile(ctx, accessToken, m.Sender.ID); fetchErr != nil {
 			uc.logger.Warn("resolve customer IG username: FetchProfile failed",
 				zap.String("instagram_account_id", account.ID.String()),
 				zap.String("sender_igsid", m.Sender.ID),
 				zap.Error(fetchErr),
 			)
-		} else if username != "" {
-			conv.CustomerUsername = &username
+		} else {
+			uc.logger.Info("resolve customer IG username: FetchProfile succeeded",
+				zap.String("username", username),
+				zap.String("ig_business_id", igBusinessID),
+			)
+			if username != "" {
+				conv.CustomerUsername = &username
+			}
 		}
 	}
 
