@@ -160,6 +160,7 @@ type KnowledgeDocumentModel struct {
 	Title          string         `gorm:"column:title"`
 	SourceType     string         `gorm:"column:source_type"`
 	FileURL        *string        `gorm:"column:file_url"`
+	Content        *string        `gorm:"column:content"`
 	Status         string         `gorm:"column:status"`
 	ErrorMessage   *string        `gorm:"column:error_message"`
 	UploadedBy     *uuid.UUID     `gorm:"column:uploaded_by;type:uuid"`

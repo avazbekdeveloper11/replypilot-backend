@@ -36,10 +36,19 @@ type KnowledgeDocument struct {
 	Title          string
 	SourceType     KBSourceType
 	FileURL        *string
-	Status         KBDocumentStatus
-	ErrorMessage   *string
-	UploadedBy     *uuid.UUID
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
-	DeletedAt      *time.Time
+	// Content is the raw source text ingestion was run on — pasted text
+	// as-is, or a .txt/.md file's decoded contents. Persisted (added in
+	// migration 000012) specifically so the Knowledge Base page can offer
+	// an edit flow: without this, the only durable copy of a document's
+	// text was its chunked+embedded pieces in knowledge_base_chunks, which
+	// overlap by design (see knowledgebase.chunkOverlap) and so can't be
+	// cleanly reassembled back into an editable original. Nil for any
+	// document created before this column existed, until it's re-saved.
+	Content      *string
+	Status       KBDocumentStatus
+	ErrorMessage *string
+	UploadedBy   *uuid.UUID
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	DeletedAt    *time.Time
 }

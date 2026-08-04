@@ -72,6 +72,7 @@ func (r *KnowledgeDocumentRepository) Update(ctx context.Context, doc *entity.Kn
 	err := withTenant(ctx, r.db, doc.OrganizationID, func(tx *gorm.DB) error {
 		res := tx.Model(&KnowledgeDocumentModel{}).Where("id = ?", doc.ID).Updates(map[string]any{
 			"title":         model.Title,
+			"content":       model.Content,
 			"status":        model.Status,
 			"error_message": model.ErrorMessage,
 		})
@@ -110,6 +111,7 @@ func documentToModel(d *entity.KnowledgeDocument) *KnowledgeDocumentModel {
 		Title:          d.Title,
 		SourceType:     string(d.SourceType),
 		FileURL:        d.FileURL,
+		Content:        d.Content,
 		Status:         string(d.Status),
 		ErrorMessage:   d.ErrorMessage,
 		UploadedBy:     d.UploadedBy,
@@ -123,6 +125,7 @@ func modelToDocument(m *KnowledgeDocumentModel) *entity.KnowledgeDocument {
 		Title:          m.Title,
 		SourceType:     entity.KBSourceType(m.SourceType),
 		FileURL:        m.FileURL,
+		Content:        m.Content,
 		Status:         entity.KBDocumentStatus(m.Status),
 		ErrorMessage:   m.ErrorMessage,
 		UploadedBy:     m.UploadedBy,

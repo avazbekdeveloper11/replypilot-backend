@@ -122,14 +122,29 @@ type UpdateMemberRoleRequest struct {
 
 // KnowledgeDocumentResponse deliberately does not include chunk content or
 // embeddings — those are internal to the RAG pipeline, not something the
-// Knowledge Base page's document list needs to render.
+// Knowledge Base page's document list needs to render. Content is the
+// original editable text (see entity.KnowledgeDocument.Content) — nil for
+// documents ingested before that column existed. Included here (not a
+// separate "detail" DTO) since this codebase doesn't split list/detail
+// shapes elsewhere (see ProductResponse); the list view just doesn't
+// render it.
 type KnowledgeDocumentResponse struct {
 	ID           string  `json:"id"`
 	Title        string  `json:"title"`
 	SourceType   string  `json:"source_type"`
+	Content      *string `json:"content,omitempty"`
 	Status       string  `json:"status"`
 	ErrorMessage *string `json:"error_message,omitempty"`
 	CreatedAt    string  `json:"created_at"`
+}
+
+// UpdateKnowledgeDocumentRequest: omitting content entirely (nil, not "")
+// means "title-only edit" — see knowledgebase.UpdateInput's doc comment on
+// why that distinction matters (it decides whether chunks/embeddings get
+// rebuilt at all).
+type UpdateKnowledgeDocumentRequest struct {
+	Title   string  `json:"title" binding:"required,min=1,max=200"`
+	Content *string `json:"content" binding:"omitempty,min=1"`
 }
 
 // ProductResponse mirrors entity.Product for the dashboard's Products page.

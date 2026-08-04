@@ -138,6 +138,7 @@ func NewRouter(h Handlers, mw Middlewares) *gin.Engine {
 			protected.GET("/knowledge-base/documents", h.Knowledge.List)
 			protected.POST("/knowledge-base/documents", h.Knowledge.Upload)
 			protected.GET("/knowledge-base/documents/:id", h.Knowledge.Get)
+			protected.PATCH("/knowledge-base/documents/:id", h.Knowledge.Update)
 			protected.DELETE("/knowledge-base/documents/:id", h.Knowledge.Delete)
 
 			protected.GET("/billing/plans", h.Billing.ListPlans)

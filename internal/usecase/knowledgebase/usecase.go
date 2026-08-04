@@ -64,12 +64,17 @@ type UploadInput struct {
 // upload requests start timing out.
 func (uc *UseCase) Upload(ctx context.Context, in UploadInput) (*entity.KnowledgeDocument, error) {
 	uploadedBy := in.UploadedBy
+	content := in.Content
 	doc := &entity.KnowledgeDocument{
 		OrganizationID: in.OrganizationID,
 		Title:          in.Title,
 		SourceType:     in.SourceType,
-		Status:         entity.KBDocumentStatusPending,
-		UploadedBy:     &uploadedBy,
+		// Stored up front, before ingestion even starts, so the raw text
+		// survives even if chunking/embedding fails partway through — see
+		// entity.KnowledgeDocument.Content's doc comment.
+		Content:    &content,
+		Status:     entity.KBDocumentStatusPending,
+		UploadedBy: &uploadedBy,
 	}
 	if err := uc.docRepo.Create(ctx, doc); err != nil {
 		return nil, err
@@ -126,6 +131,67 @@ func (uc *UseCase) ingest(ctx context.Context, doc *entity.KnowledgeDocument, co
 	doc.Status = entity.KBDocumentStatusReady
 	doc.ErrorMessage = nil
 	return uc.docRepo.Update(ctx, doc)
+}
+
+type UpdateInput struct {
+	Title string
+	// Content == nil means "leave the text/chunks alone, only the title
+	// changed" — no re-ingestion, just a metadata update. Content !=
+	// nil (including a pointer to "") triggers a full re-chunk +
+	// re-embed, same pipeline Upload uses, because the old chunks no
+	// longer match the new text and there is no cheap way to diff and
+	// patch embeddings in place.
+	Content *string
+}
+
+// Update edits an existing document's title and, optionally, its text.
+// Editing text discards and rebuilds every chunk/embedding for this
+// document — same cost as a fresh Upload — so this can take a moment for
+// a large document, same caveat as Upload's doc comment.
+func (uc *UseCase) Update(ctx context.Context, orgID, id uuid.UUID, in UpdateInput) (*entity.KnowledgeDocument, error) {
+	title := strings.TrimSpace(in.Title)
+	if title == "" {
+		return nil, apperror.InvalidInput("title is required", nil)
+	}
+
+	doc, err := uc.docRepo.FindByID(ctx, orgID, id)
+	if err != nil {
+		return nil, err
+	}
+	doc.Title = title
+
+	if in.Content == nil {
+		if err := uc.docRepo.Update(ctx, doc); err != nil {
+			return nil, err
+		}
+		return doc, nil
+	}
+
+	content := strings.TrimSpace(*in.Content)
+	if content == "" {
+		return nil, apperror.InvalidInput("content cannot be empty", nil)
+	}
+
+	// The existing chunks were embedded from the old text — once it
+	// changes they're not "stale versions", they're wrong, so they're
+	// deleted outright rather than left around until ingest succeeds.
+	// Matches Delete's same ordering (chunks first, so a document is
+	// never left referencing embeddings from different text than what
+	// its own content column says).
+	if err := uc.chunkRepo.DeleteByDocument(ctx, orgID, id); err != nil {
+		return nil, err
+	}
+	doc.Content = &content
+
+	if err := uc.ingest(ctx, doc, content); err != nil {
+		doc.Status = entity.KBDocumentStatusFailed
+		msg := err.Error()
+		doc.ErrorMessage = &msg
+		_ = uc.docRepo.Update(ctx, doc) // best-effort; caller sees the ingest error below
+		return nil, apperror.Internal("re-ingest knowledge document", err)
+	}
+
+	return doc, nil
 }
 
 func (uc *UseCase) List(ctx context.Context, orgID uuid.UUID) ([]*entity.KnowledgeDocument, error) {

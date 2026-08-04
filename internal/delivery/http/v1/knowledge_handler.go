@@ -154,6 +154,46 @@ func (h *KnowledgeHandler) Get(c *gin.Context) {
 	response.OK(c, toKnowledgeDocumentResponse(doc))
 }
 
+// Update godoc
+// @Summary      Update a knowledge base document
+// @Description  Title-only edit if `content` is omitted from the body. If `content` is present, the document is re-chunked and re-embedded from scratch (old chunks/embeddings are discarded first) — same ingest pipeline as Upload, so this can take a moment for a large document.
+// @Tags         knowledge-base
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id      path string                         true "Document ID"
+// @Param        request body UpdateKnowledgeDocumentRequest  true "Fields to update"
+// @Success      200 {object} response.Envelope{data=KnowledgeDocumentResponse}
+// @Router       /v1/knowledge-base/documents/{id} [patch]
+func (h *KnowledgeHandler) Update(c *gin.Context) {
+	orgID, err := orgIDFromContext(c)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.Error(apperror.InvalidInput("invalid document id", err))
+		return
+	}
+
+	var req UpdateKnowledgeDocumentRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.Error(apperror.InvalidInput("invalid request body", err))
+		return
+	}
+
+	doc, err := h.uc.Update(c.Request.Context(), orgID, id, knowledgebase.UpdateInput{
+		Title:   req.Title,
+		Content: req.Content,
+	})
+	if err != nil {
+		c.Error(err)
+		return
+	}
+	response.OK(c, toKnowledgeDocumentResponse(doc))
+}
+
 // Delete godoc
 // @Summary      Delete a knowledge base document (and its chunks)
 // @Tags         knowledge-base
@@ -186,6 +226,7 @@ func toKnowledgeDocumentResponse(d *entity.KnowledgeDocument) KnowledgeDocumentR
 		ID:           d.ID.String(),
 		Title:        d.Title,
 		SourceType:   string(d.SourceType),
+		Content:      d.Content,
 		Status:       string(d.Status),
 		ErrorMessage: d.ErrorMessage,
 		CreatedAt:    d.CreatedAt.Format(time.RFC3339),
