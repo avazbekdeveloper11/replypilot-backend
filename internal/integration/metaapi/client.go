@@ -193,6 +193,39 @@ func (c *Client) FetchProfile(ctx context.Context, accessToken, igUserID string)
 	return result.Username, string(result.UserID), nil
 }
 
+// FetchCustomerUsername: GET {graphBase}/{igsid}?fields=username
+//
+// This is a DIFFERENT Graph API call from FetchProfile above, despite
+// looking similar, and the two are NOT interchangeable: `user_id` is only
+// a valid field when the node being queried is the connecting business's
+// own account (FetchProfile's job, during OAuth connect). Querying it for
+// an arbitrary message sender's IGSID — a random customer, not a business
+// account — gets the whole request rejected outright:
+//
+//	meta graph api error (http 400, code 100, subcode 0, type
+//	IGApiException): Tried accessing nonexisting field (user_id)
+//
+// discovered live in production: WebhookUseCase.ingestMessage's
+// username-resolve reused FetchProfile for this and got that error on
+// every single inbound message, silently swallowed (no logging existed
+// yet either), so customer usernames never resolved and nothing pointed
+// at why. `username` alone is fine on this node — this method exists so
+// that call site never asks for a field this endpoint doesn't support.
+func (c *Client) FetchCustomerUsername(ctx context.Context, accessToken, igsid string) (string, error) {
+	u := fmt.Sprintf("%s/%s?fields=username&access_token=%s", c.graphBase, igsid, url.QueryEscape(accessToken))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return "", err
+	}
+
+	var result profileResponse
+	if err := c.doJSON(req, &result); err != nil {
+		return "", err
+	}
+	return result.Username, nil
+}
+
 type subscribedAppsResponse struct {
 	Success bool `json:"success"`
 }

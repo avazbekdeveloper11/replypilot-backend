@@ -25,11 +25,15 @@ type EventPublisher interface {
 // resolve a customer's Instagram username from their IGSID (the sender
 // ID a webhook delivery carries — Meta's messaging payload has no
 // username field, only that opaque ID). Satisfied by
-// internal/integration/metaapi.Client.FetchProfile, which this usecase
-// already needs no other method from — same narrow-interface pattern as
-// EventPublisher above and internal/usecase/ai.Sender.
+// internal/integration/metaapi.Client.FetchCustomerUsername — deliberately
+// NOT the same method oauth_usecase.go uses (FetchProfile): that one
+// requests a `user_id` field that Meta's Graph API only allows when the
+// node being queried is the connecting business's own account, and
+// rejects outright for an arbitrary customer's IGSID. See
+// FetchCustomerUsername's doc comment in internal/integration/metaapi for
+// how that was discovered.
 type ProfileFetcher interface {
-	FetchProfile(ctx context.Context, accessToken, igUserID string) (username, igBusinessID string, err error)
+	FetchCustomerUsername(ctx context.Context, accessToken, igUserID string) (username string, err error)
 }
 
 // RoutingKeyDMReceived is the event a downstream AI-processing worker
@@ -230,34 +234,25 @@ func (uc *WebhookUseCase) ingestMessage(ctx context.Context, igBusinessAccountID
 	//
 	// Both failure points are logged at Warn (not silently dropped) — this
 	// used to swallow errors with no trace at all, which made "why is the
-	// username never showing up" undiagnosable from logs alone.
-	shouldResolveUsername := (isNewConversation || conv.CustomerUsername == nil) && uc.profiles != nil
-	uc.logger.Info("resolve customer IG username: entering block",
-		zap.Bool("is_new_conversation", isNewConversation),
-		zap.Bool("customer_username_nil", conv.CustomerUsername == nil),
-		zap.Bool("profiles_configured", uc.profiles != nil),
-		zap.Bool("will_attempt", shouldResolveUsername),
-	)
-	if shouldResolveUsername {
+	// username never showing up" undiagnosable from logs alone. (The
+	// per-message "entering block" / "succeeded" Info-level tracing that
+	// was here during initial diagnosis has been removed now that the
+	// root cause — FetchProfile requesting a field Graph API rejects for
+	// this node — is confirmed and fixed via FetchCustomerUsername.)
+	if (isNewConversation || conv.CustomerUsername == nil) && uc.profiles != nil {
 		if accessToken, decErr := uc.encryptor.Decrypt(account.AccessTokenEncrypted); decErr != nil {
 			uc.logger.Warn("resolve customer IG username: decrypt account access token failed",
 				zap.String("instagram_account_id", account.ID.String()),
 				zap.Error(decErr),
 			)
-		} else if username, igBusinessID, fetchErr := uc.profiles.FetchProfile(ctx, accessToken, m.Sender.ID); fetchErr != nil {
-			uc.logger.Warn("resolve customer IG username: FetchProfile failed",
+		} else if username, fetchErr := uc.profiles.FetchCustomerUsername(ctx, accessToken, m.Sender.ID); fetchErr != nil {
+			uc.logger.Warn("resolve customer IG username: FetchCustomerUsername failed",
 				zap.String("instagram_account_id", account.ID.String()),
 				zap.String("sender_igsid", m.Sender.ID),
 				zap.Error(fetchErr),
 			)
-		} else {
-			uc.logger.Info("resolve customer IG username: FetchProfile succeeded",
-				zap.String("username", username),
-				zap.String("ig_business_id", igBusinessID),
-			)
-			if username != "" {
-				conv.CustomerUsername = &username
-			}
+		} else if username != "" {
+			conv.CustomerUsername = &username
 		}
 	}
 
