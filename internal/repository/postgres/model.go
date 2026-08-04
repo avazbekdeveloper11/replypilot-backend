@@ -305,5 +305,3 @@ type LeadModel struct {
 }
 
 func (LeadModel) TableName() string { return "dm_leads" }
-
-func (LeadModel) TableName() string { return "leads" }
