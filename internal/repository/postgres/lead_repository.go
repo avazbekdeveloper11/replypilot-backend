@@ -53,7 +53,7 @@ func (r *LeadRepository) HasOpen(ctx context.Context, orgID, conversationID uuid
 	return count > 0, nil
 }
 
-// leadListRow is a flattened scan target for the leads<->conversations
+// leadListRow is a flattened scan target for the dm_leads<->conversations
 // join — see entity.Lead.CustomerUsername's doc comment for why this
 // isn't just LeadModel.
 type leadListRow struct {
@@ -71,13 +71,13 @@ type leadListRow struct {
 func (r *LeadRepository) ListByOrganization(ctx context.Context, orgID uuid.UUID, status *entity.LeadStatus) ([]*entity.Lead, error) {
 	var rows []leadListRow
 	err := withTenant(ctx, r.db, orgID, func(tx *gorm.DB) error {
-		query := tx.Table("leads").
-			Select("leads.id, leads.organization_id, leads.conversation_id, leads.phone, leads.summary, leads.status, leads.created_at, leads.updated_at, conversations.customer_username").
-			Joins("LEFT JOIN conversations ON conversations.id = leads.conversation_id").
-			Where("leads.organization_id = ?", orgID).
-			Order("leads.created_at DESC")
+		query := tx.Table("dm_leads").
+			Select("dm_leads.id, dm_leads.organization_id, dm_leads.conversation_id, dm_leads.phone, dm_leads.summary, dm_leads.status, dm_leads.created_at, dm_leads.updated_at, conversations.customer_username").
+			Joins("LEFT JOIN conversations ON conversations.id = dm_leads.conversation_id").
+			Where("dm_leads.organization_id = ?", orgID).
+			Order("dm_leads.created_at DESC")
 		if status != nil {
-			query = query.Where("leads.status = ?", string(*status))
+			query = query.Where("dm_leads.status = ?", string(*status))
 		}
 		return query.Scan(&rows).Error
 	})
@@ -105,10 +105,10 @@ func (r *LeadRepository) ListByOrganization(ctx context.Context, orgID uuid.UUID
 func (r *LeadRepository) FindByID(ctx context.Context, orgID, id uuid.UUID) (*entity.Lead, error) {
 	var row leadListRow
 	err := withTenant(ctx, r.db, orgID, func(tx *gorm.DB) error {
-		return tx.Table("leads").
-			Select("leads.id, leads.organization_id, leads.conversation_id, leads.phone, leads.summary, leads.status, leads.created_at, leads.updated_at, conversations.customer_username").
-			Joins("LEFT JOIN conversations ON conversations.id = leads.conversation_id").
-			Where("leads.id = ? AND leads.organization_id = ?", id, orgID).
+		return tx.Table("dm_leads").
+			Select("dm_leads.id, dm_leads.organization_id, dm_leads.conversation_id, dm_leads.phone, dm_leads.summary, dm_leads.status, dm_leads.created_at, dm_leads.updated_at, conversations.customer_username").
+			Joins("LEFT JOIN conversations ON conversations.id = dm_leads.conversation_id").
+			Where("dm_leads.id = ? AND dm_leads.organization_id = ?", id, orgID).
 			Take(&row).Error
 	})
 	if err != nil {

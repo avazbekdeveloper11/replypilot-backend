@@ -1,1 +1,1 @@
-DROP TABLE leads;
+DROP TABLE dm_leads;

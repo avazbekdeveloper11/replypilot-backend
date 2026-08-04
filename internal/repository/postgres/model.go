@@ -290,6 +290,9 @@ type ClickIntegrationModel struct {
 
 func (ClickIntegrationModel) TableName() string { return "click_integrations" }
 
+// LeadModel maps to dm_leads, not leads: migration 000001 already owns an
+// unrelated "leads" table (dead CRM-style schema, no Go code behind it) —
+// see 000013_leads.up.sql's doc comment for the full story.
 type LeadModel struct {
 	ID             uuid.UUID `gorm:"column:id;type:uuid;primaryKey"`
 	OrganizationID uuid.UUID `gorm:"column:organization_id;type:uuid"`
@@ -300,5 +303,7 @@ type LeadModel struct {
 	CreatedAt      time.Time `gorm:"column:created_at"`
 	UpdatedAt      time.Time `gorm:"column:updated_at"`
 }
+
+func (LeadModel) TableName() string { return "dm_leads" }
 
 func (LeadModel) TableName() string { return "leads" }
