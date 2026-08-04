@@ -16,8 +16,13 @@ import (
 type ConversationListParams struct {
 	OrganizationID uuid.UUID
 	Status         *entity.ConversationStatus
-	CursorBefore   *time.Time
-	Limit          int
+	// Search, when non-empty, filters to conversations whose
+	// customer_username case-insensitively contains this substring. It's
+	// deliberately not full-text search — customer_username is a short
+	// handle, not prose, so a simple ILIKE is the right tool.
+	Search       string
+	CursorBefore *time.Time
+	Limit        int
 }
 
 type ConversationRepository interface {

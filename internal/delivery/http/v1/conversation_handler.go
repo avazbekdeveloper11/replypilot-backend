@@ -29,6 +29,7 @@ func NewConversationHandler(uc *conversation.UseCase) *ConversationHandler {
 // @Produce      json
 // @Security     BearerAuth
 // @Param        status query string false "filter by status: ai_active, pending_human, human_active, resolved, closed"
+// @Param        search query string false "case-insensitive substring match on customer_username"
 // @Param        cursor query string false "RFC3339 timestamp cursor"
 // @Param        limit  query int    false "page size, default 20"
 // @Success      200 {object} response.Envelope{data=[]ConversationResponse}
@@ -40,7 +41,7 @@ func (h *ConversationHandler) List(c *gin.Context) {
 		return
 	}
 
-	params := repository.ConversationListParams{OrganizationID: orgID}
+	params := repository.ConversationListParams{OrganizationID: orgID, Search: c.Query("search")}
 
 	if statusParam := c.Query("status"); statusParam != "" {
 		s := entity.ConversationStatus(statusParam)

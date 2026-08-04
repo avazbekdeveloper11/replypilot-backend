@@ -87,6 +87,9 @@ func (r *ConversationRepository) List(ctx context.Context, params repository.Con
 		if params.Status != nil {
 			query = query.Where("status = ?", string(*params.Status))
 		}
+		if params.Search != "" {
+			query = query.Where("customer_username ILIKE ?", "%"+params.Search+"%")
+		}
 		if params.CursorBefore != nil {
 			query = query.Where("last_message_at < ?", *params.CursorBefore)
 		}
