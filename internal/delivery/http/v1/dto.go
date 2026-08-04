@@ -187,6 +187,23 @@ type ClickIntegrationResponse struct {
 	ConnectedAt    string  `json:"connected_at"`
 }
 
+// LeadResponse mirrors entity.Lead for the dashboard's Leads page.
+// CustomerUsername is joined in from the conversation (see
+// entity.Lead.CustomerUsername's doc comment), not a leads column.
+type LeadResponse struct {
+	ID               string  `json:"id"`
+	ConversationID   string  `json:"conversation_id"`
+	CustomerUsername *string `json:"customer_username,omitempty"`
+	Phone            string  `json:"phone"`
+	Summary          string  `json:"summary"`
+	Status           string  `json:"status"`
+	CreatedAt        string  `json:"created_at"`
+}
+
+type UpdateLeadStatusRequest struct {
+	Status string `json:"status" binding:"required,oneof=new contacted done"`
+}
+
 type ConnectClickRequest struct {
 	MerchantID     string  `json:"merchant_id" binding:"required"`
 	ServiceID      string  `json:"service_id" binding:"required"`

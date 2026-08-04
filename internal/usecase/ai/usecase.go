@@ -47,6 +47,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -111,6 +112,16 @@ type ClickIntegrationLookup interface {
 	FindByOrganization(ctx context.Context, orgID uuid.UUID) (*entity.ClickIntegration, error)
 }
 
+// Leads is the narrow port onto lead capture — satisfied by
+// repository.LeadRepository. HasOpen is what stops a lead from being
+// re-created on every single subsequent message once a phone number has
+// already been captured and nobody's acted on it yet — see
+// captureLeadIfPresent and entity.Lead's doc comment.
+type Leads interface {
+	Create(ctx context.Context, lead *entity.Lead) error
+	HasOpen(ctx context.Context, orgID, conversationID uuid.UUID) (bool, error)
+}
+
 // authError is satisfied by a Sender error that can identify itself as a
 // Meta authentication failure (an invalid, expired, or revoked access
 // token) — metaapi.GraphAPIError implements this for Graph API error code
@@ -139,6 +150,7 @@ type UseCase struct {
 	encryptor   *crypto.AESGCMEncryptor
 	products    ProductLister
 	click       ClickIntegrationLookup
+	leads       Leads
 }
 
 func New(
@@ -152,6 +164,7 @@ func New(
 	encryptor *crypto.AESGCMEncryptor,
 	products ProductLister,
 	click ClickIntegrationLookup,
+	leads Leads,
 ) *UseCase {
 	return &UseCase{
 		convRepo:    convRepo,
@@ -164,6 +177,7 @@ func New(
 		encryptor:   encryptor,
 		products:    products,
 		click:       click,
+		leads:       leads,
 	}
 }
 
@@ -307,6 +321,11 @@ func (uc *UseCase) HandleInboundMessage(ctx context.Context, ev InboundEvent) er
 		return err
 	}
 
+	// Best-effort, after the customer already has their reply — a failure
+	// here must never look like a failure to respond. See
+	// captureLeadIfPresent's doc comment.
+	uc.captureLeadIfPresent(ctx, conv, *latest.Content, history)
+
 	return uc.updateConversationAfterReply(ctx, conv, replyText)
 }
 
@@ -347,6 +366,121 @@ func (uc *UseCase) handoff(ctx context.Context, conv *entity.Conversation) error
 		return apperror.Internal("mark conversation pending_human", err)
 	}
 	return nil
+}
+
+// captureLeadIfPresent is fire-and-forget: if the customer's latest
+// message contains what looks like a phone number, and this conversation
+// doesn't already have an open (status=new) lead, record one so it shows
+// up on the Leads dashboard page for a human to actually call.
+//
+// Deliberately does NOT touch conv.Status or stop the AI from replying on
+// this thread — pending_human would do that (see HandleInboundMessage's
+// AI-owns-the-conversation gate), but a lead is a parallel "someone should
+// follow up by phone" signal, not a "the AI must stop talking" signal; the
+// two were kept as separate concepts specifically so the AI keeps
+// answering the customer's questions while a human independently works
+// the lead. See entity.Lead's doc comment.
+//
+// Every failure here (repo error, HasOpen error, summarization error) is
+// swallowed — same reasoning as buildProductContext and
+// handleSendFailure: the customer's reply has already been sent by the
+// time this runs, so nothing here may surface as a pipeline failure.
+func (uc *UseCase) captureLeadIfPresent(ctx context.Context, conv *entity.Conversation, customerMessage string, history []*entity.Message) {
+	if uc.leads == nil {
+		return
+	}
+	phone := extractPhone(customerMessage)
+	if phone == "" {
+		return
+	}
+
+	hasOpen, err := uc.leads.HasOpen(ctx, conv.OrganizationID, conv.ID)
+	if err != nil || hasOpen {
+		return
+	}
+
+	lead := &entity.Lead{
+		OrganizationID: conv.OrganizationID,
+		ConversationID: conv.ID,
+		Phone:          phone,
+		Summary:        uc.summarizeLead(ctx, history, phone),
+		Status:         entity.LeadStatusNew,
+	}
+	_ = uc.leads.Create(ctx, lead)
+}
+
+// leadSummaryPromptTemplate is a one-off extraction call, not a
+// customer-facing reply — it deliberately does not reuse
+// systemPromptTemplate's sales-persona/grounding rules, which don't apply
+// here.
+const leadSummaryPromptTemplate = `Summarize this Instagram DM conversation for a teammate who is about to call this customer back. In 1-2 short sentences, in the same language the customer used, say what the customer wants and any specifics they already mentioned (product, quantity, delivery address or location, timing). Do not mention or repeat the phone number itself — it's already shown separately. If nothing specific has been said yet, just say the customer should be contacted to find out what they need.
+
+Conversation:
+%s`
+
+// leadSummarySystemPrompt is intentionally generic/short — this call has
+// no persona or grounding requirements, unlike systemPromptTemplate.
+const leadSummarySystemPrompt = "You write short, factual internal notes for a sales team. No greetings, no filler — just the summary requested."
+
+func (uc *UseCase) summarizeLead(ctx context.Context, history []*entity.Message, phone string) string {
+	prompt := fmt.Sprintf(leadSummaryPromptTemplate, buildTranscript(history))
+	summary, _, err := uc.generator.Generate(ctx, leadSummarySystemPrompt, prompt)
+	summary = strings.TrimSpace(summary)
+	if err != nil || summary == "" {
+		// Still a useful lead without a summary — the phone number and a
+		// link to the conversation are the essential part; this is just a
+		// fallback so the Leads page never shows a blank row.
+		return fmt.Sprintf("Customer (%s) left their phone number — review the conversation for details.", phone)
+	}
+	return summary
+}
+
+// phoneRegex matches Uzbek mobile numbers in the shapes people actually
+// type them in a DM: with or without a "+998"/"998" country code, with or
+// without spaces/dashes/parens between groups (90 123 45 67, 90-123-45-67,
+// +998901234567, etc.). It is deliberately permissive — a bare 9-digit
+// group with no country code also matches, since that's how most Uzbek
+// customers type their own number. The tradeoff: a random 9-digit number
+// in an unrelated message could rarely false-positive into a lead; the
+// cost of that is one extra row a human dismisses on the Leads page,
+// which is cheaper than the alternative of a strict pattern silently
+// missing real leads.
+var phoneRegex = regexp.MustCompile(`(?:\+?998[\s\-]?)?\(?\d{2}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}`)
+
+// extractPhone returns the first phone-shaped match in text, normalized to
+// +998XXXXXXXXX where the source made that unambiguous, or "" if nothing
+// matched.
+func extractPhone(text string) string {
+	match := phoneRegex.FindString(text)
+	if match == "" {
+		return ""
+	}
+
+	digits := digitsOnly(match)
+	switch {
+	case len(digits) == 12 && strings.HasPrefix(digits, "998"):
+		return "+" + digits
+	case len(digits) == 10 && strings.HasPrefix(digits, "0"):
+		return "+998" + digits[1:]
+	case len(digits) == 9:
+		return "+998" + digits
+	default:
+		// Matched but didn't cleanly fit a known shape (e.g. the regex
+		// caught something odd) — still return it rather than silently
+		// dropping a possible lead; a human reviewing the Leads page can
+		// tell at a glance if it's not really a phone number.
+		return digits
+	}
+}
+
+func digitsOnly(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 func (uc *UseCase) updateConversationAfterReply(ctx context.Context, conv *entity.Conversation, replyText string) error {

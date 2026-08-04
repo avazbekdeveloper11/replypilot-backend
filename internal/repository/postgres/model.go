@@ -289,3 +289,16 @@ type ClickIntegrationModel struct {
 }
 
 func (ClickIntegrationModel) TableName() string { return "click_integrations" }
+
+type LeadModel struct {
+	ID             uuid.UUID `gorm:"column:id;type:uuid;primaryKey"`
+	OrganizationID uuid.UUID `gorm:"column:organization_id;type:uuid"`
+	ConversationID uuid.UUID `gorm:"column:conversation_id;type:uuid"`
+	Phone          string    `gorm:"column:phone"`
+	Summary        string    `gorm:"column:summary"`
+	Status         string    `gorm:"column:status"`
+	CreatedAt      time.Time `gorm:"column:created_at"`
+	UpdatedAt      time.Time `gorm:"column:updated_at"`
+}
+
+func (LeadModel) TableName() string { return "leads" }

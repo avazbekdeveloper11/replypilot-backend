@@ -203,6 +203,39 @@ func (h *ConversationHandler) TakeOver(c *gin.Context) {
 	response.OK(c, toConversationResponse(conv))
 }
 
+// Resolve godoc
+// @Summary      Mark a conversation resolved
+// @Description  Only valid from human_active or pending_human — see usecase.Resolve's doc comment.
+// @Tags         conversations
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id path string true "Conversation ID"
+// @Success      200 {object} response.Envelope{data=ConversationResponse}
+// @Failure      400 {object} response.Envelope
+// @Failure      404 {object} response.Envelope
+// @Router       /v1/conversations/{id}/resolve [patch]
+func (h *ConversationHandler) Resolve(c *gin.Context) {
+	orgID, err := orgIDFromContext(c)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.Error(apperror.InvalidInput("invalid conversation id", err))
+		return
+	}
+
+	conv, err := h.uc.Resolve(c.Request.Context(), orgID, id)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+
+	response.OK(c, toConversationResponse(conv))
+}
+
 func toConversationResponse(conv *entity.Conversation) ConversationResponse {
 	resp := ConversationResponse{
 		ID:                 conv.ID.String(),

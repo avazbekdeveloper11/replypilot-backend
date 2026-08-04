@@ -46,6 +46,7 @@ import (
 	dashboarduc "github.com/replypilot/backend/internal/usecase/dashboard"
 	instagramuc "github.com/replypilot/backend/internal/usecase/instagram"
 	knowledgebaseuc "github.com/replypilot/backend/internal/usecase/knowledgebase"
+	leaduc "github.com/replypilot/backend/internal/usecase/lead"
 	organizationuc "github.com/replypilot/backend/internal/usecase/organization"
 	platformsettingsuc "github.com/replypilot/backend/internal/usecase/platformsettings"
 	productuc "github.com/replypilot/backend/internal/usecase/product"
@@ -128,6 +129,7 @@ func New(cfg *config.Config) (*Container, error) {
 	platformSettingsRepo := postgresrepo.NewPlatformSettingsRepository(db)
 	productRepo := postgresrepo.NewProductRepository(db)
 	clickIntegrationRepo := postgresrepo.NewClickIntegrationRepository(db)
+	leadRepo := postgresrepo.NewLeadRepository(db)
 	refreshTokenStore := redisrepo.NewRefreshTokenStore(redisClient)
 	oauthStateStore := redisrepo.NewOAuthStateStore(redisClient)
 	otpStore := redisrepo.NewOTPStore(redisClient)
@@ -165,6 +167,7 @@ func New(cfg *config.Config) (*Container, error) {
 	platformSettingsUseCase := platformsettingsuc.New(platformSettingsRepo, encryptor)
 	productUseCase := productuc.New(productRepo)
 	clickUseCase := clickuc.New(clickIntegrationRepo)
+	leadUseCase := leaduc.New(leadRepo)
 
 	// --- handlers ---
 	handlers := httpserver.Handlers{
@@ -182,6 +185,7 @@ func New(cfg *config.Config) (*Container, error) {
 		Admin:        v1.NewAdminHandler(adminUseCase, platformSettingsUseCase),
 		Product:      v1.NewProductHandler(productUseCase),
 		Click:        v1.NewClickHandler(clickUseCase),
+		Lead:         v1.NewLeadHandler(leadUseCase),
 	}
 
 	// --- middlewares ---
