@@ -256,25 +256,28 @@ func (uc *UseCase) HandleInboundMessage(ctx context.Context, ev InboundEvent) er
 
 	latest := findMessage(history, ev.MessageID)
 	hasText := latest != nil && latest.Content != nil && strings.TrimSpace(*latest.Content) != ""
-	// isMedia covers images and voice messages — both go through the same
-	// Gemini multimodal path (see MediaGenerator's doc comment); video/file
-	// attachments are deliberately excluded here, next in line but not
-	// built yet. Additionally requires mediaGen/media to be wired — if
-	// either is nil (e.g. a test double that only fakes the text path),
-	// this falls through to hasText-only handling below instead of
-	// panicking on a nil interface call.
+	// isMedia covers images, voice messages, and videos — all three go
+	// through the same Gemini multimodal path (see MediaGenerator's doc
+	// comment); file attachments are deliberately excluded, since a
+	// generic "file" has no defined content shape for Gemini to reason
+	// about the way it can with these three. Additionally requires
+	// mediaGen/media to be wired — if either is nil (e.g. a test double
+	// that only fakes the text path), this falls through to hasText-only
+	// handling below instead of panicking on a nil interface call.
 	isMedia := latest != nil &&
-		(latest.MessageType == entity.MessageTypeImage || latest.MessageType == entity.MessageTypeAudio) &&
+		(latest.MessageType == entity.MessageTypeImage ||
+			latest.MessageType == entity.MessageTypeAudio ||
+			latest.MessageType == entity.MessageTypeVideo) &&
 		latest.AttachmentURL != nil && uc.mediaGen != nil && uc.media != nil
 	if !hasText && !isMedia {
-		// Nothing to respond to — e.g. a video/file attachment with no
-		// caption, or (shouldn't happen, but fail safe) the event's message
-		// isn't in the fetched history window.
+		// Nothing to respond to — e.g. a file attachment with no caption,
+		// or (shouldn't happen, but fail safe) the event's message isn't in
+		// the fetched history window.
 		return nil
 	}
 
-	// RAG retrieval needs real text to embed and search against. An
-	// image-only message (no caption) has none — hits stays empty and
+	// RAG retrieval needs real text to embed and search against. A
+	// media-only message (no caption) has none — hits stays empty and
 	// buildSystemPrompt falls back to its "(no context available)"
 	// placeholder, same as any other ungrounded turn. Once there IS text
 	// (a caption, or this is a text message), search on it as before.
@@ -631,6 +634,7 @@ Rules:
 - Payment links are dangerous to get wrong: only ever send a URL that appears character-for-character in the "Products" section below. NEVER type out, construct, guess, modify, or shorten a payment link yourself, even partially — copy it exactly or don't send one. If a customer wants to pay for something that either isn't in the Products list, or is listed there WITHOUT a payment link, do not invent one — tell them warmly that a team member will send payment details shortly.
 - When the customer's latest message includes a photo, actually look at it and respond to what's in it as a natural part of the conversation — it might be a product they're asking about, a screenshot of a question, a payment receipt, a size/color they're showing you, etc. Don't ignore the image and only answer any accompanying text.
 - When the customer's latest message is a voice message, actually listen to it and respond to what they said, the same as if they'd typed it — including matching whatever language they spoke in, not just the language of earlier text in this conversation.
+- When the customer's latest message is a video, actually watch it and respond to what's shown/said in it, the same as you would a photo or voice message — it might be a product demo, an unboxing question, a problem they're showing you, etc.
 
 Products:
 %s
@@ -766,8 +770,10 @@ func buildTranscript(history []*entity.Message) string {
 			fmt.Fprintf(&b, "%s: [sent a photo]\n", speaker)
 		case m.MessageType == entity.MessageTypeAudio:
 			fmt.Fprintf(&b, "%s: [sent a voice message]\n", speaker)
+		case m.MessageType == entity.MessageTypeVideo:
+			fmt.Fprintf(&b, "%s: [sent a video]\n", speaker)
 		default:
-			// Video/file with no caption, or any other empty-content
+			// A file attachment with no caption, or any other empty-content
 			// message — nothing textual to contribute yet.
 		}
 	}

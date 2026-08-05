@@ -262,28 +262,45 @@ func (c *Client) Generate(ctx context.Context, systemPrompt, userMessage string)
 // GenerateWithMedia is Generate's multimodal sibling: the user turn carries
 // one inline media blob alongside (optionally empty) text, so Gemini
 // reasons about both together in one call — used when internal/usecase/ai
-// determines the customer's latest message is an image or a voice message
-// (see ai.UseCase.HandleInboundMessage). Originally named GenerateWithImage
-// and image-only; generalized once voice support needed the exact same
-// request shape — Gemini's inlineData mechanism doesn't care whether the
-// bytes are a photo or an audio clip, only mediaMimeType changes.
+// determines the customer's latest message is an image, voice message, or
+// video (see ai.UseCase.HandleInboundMessage). Originally named
+// GenerateWithImage and image-only; generalized once voice and video
+// support needed the exact same request shape — Gemini's inlineData
+// mechanism doesn't care what kind of media the bytes are, only
+// mediaMimeType changes.
 //
 // userMessage may be "" (media with no caption); mediaData is the raw
 // downloaded bytes (not base64 yet — that happens here) and mediaMimeType
-// is whatever the source served (e.g. "image/jpeg", "audio/mp4"), passed
-// straight through to Gemini rather than re-detected, since re-sniffing
-// content-type from bytes is one more way to get it wrong for no benefit.
+// is whatever the source served (e.g. "image/jpeg", "audio/mp4",
+// "video/mp4"), passed straight through to Gemini rather than re-detected,
+// since re-sniffing content-type from bytes is one more way to get it
+// wrong for no benefit.
 //
-// Audio caveat: Gemini's documented natively-supported audio MIME types
-// are wav/mp3/aiff/aac/ogg/flac (ai.google.dev/gemini-api/docs/audio).
-// Instagram voice-message attachments have not been confirmed live against
-// this project's key as of this writing — if Meta's CDN serves a
-// Content-Type Gemini rejects, this call returns an error, which
-// HandleInboundMessage's isMedia branch already degrades out of safely
-// (falls back to a text-only reply if there's a caption/history, or hands
-// off to a human otherwise) rather than crashing the pipeline. Worth
-// checking real logs after this ships, same spirit as GenerationModel's
-// doc comment on why "confirmed live" matters more than what docs claim.
+// Two caveats, neither confirmed live against this project's key as of
+// this writing — both degrade safely rather than crash if wrong (this call
+// just returns an error, which HandleInboundMessage's isMedia branch
+// already handles: falls back to a text-only reply if there's a
+// caption/history, or hands off to a human otherwise):
+//
+//   - Audio MIME type: Gemini's documented natively-supported audio types
+//     are wav/mp3/aiff/aac/ogg/flac (ai.google.dev/gemini-api/docs/audio).
+//     Whatever Content-Type Instagram's voice-message CDN actually serves
+//     hasn't been checked against that list yet.
+//   - Video size/length: mediaData comes from metaapi.DownloadAttachment,
+//     capped at 15MB (see maxAttachmentBytes there) specifically to stay
+//     under Gemini's ~20MB total inline-request limit after base64
+//     expansion — fine for a photo or a short voice clip, but a longer or
+//     higher-bitrate DM video can plausibly exceed it, in which case the
+//     download itself fails before Gemini is even called. The proper fix
+//     for large video, if this turns out to matter in practice, is
+//     Gemini's Files API (upload once, reference by URI, ~2GB/48h-retention
+//     limits instead of this endpoint's inline-only ~20MB) — a bigger
+//     change than swapping a constant, not done here since Instagram DM
+//     video clips are typically short.
+//
+// Worth checking real logs after this ships, same spirit as
+// GenerationModel's doc comment on why "confirmed live" matters more than
+// what docs claim.
 func (c *Client) GenerateWithMedia(ctx context.Context, systemPrompt, userMessage string, mediaData []byte, mediaMimeType string) (string, GenerateUsage, error) {
 	parts := make([]generatePart, 0, 2)
 	if strings.TrimSpace(userMessage) != "" {
