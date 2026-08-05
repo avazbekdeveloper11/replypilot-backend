@@ -127,8 +127,16 @@ type webhookParty struct {
 }
 
 type webhookMessage struct {
-	MID  string `json:"mid"`
+	MID string `json:"mid"`
 	Text string `json:"text"`
+	// Attachments carries image/video/audio/file payloads — previously
+	// unmarshaled into nothing (Go's json package silently drops fields a
+	// struct doesn't declare), so every non-text DM was persisted as an
+	// empty-content text message and the AI pipeline had nothing to react
+	// to. Meta only ever sends one attachment per message in practice, but
+	// the field is an array per Meta's own schema, so this mirrors that
+	// rather than assuming a single element.
+	Attachments []webhookAttachment `json:"attachments,omitempty"`
 	// IsEcho is true when this notification is Meta echoing back a message
 	// OUR side sent (via this API, or a human typing directly in the
 	// Instagram app) — not a new customer message. Skipped in ingestMessage
@@ -136,6 +144,26 @@ type webhookMessage struct {
 	// re-ingested as if a customer sent them, corrupting the conversation
 	// and potentially re-triggering an AI response to its own reply.
 	IsEcho bool `json:"is_echo,omitempty"`
+}
+
+// webhookAttachment mirrors Meta's message.attachments[] shape:
+// https://developers.facebook.com/docs/messenger-platform/instagram/features/webhook#messages
+// Type is one of "image", "video", "audio", "file" (also "story_mention"
+// for a story reply, "fallback" for some link-preview cases — anything
+// this codebase doesn't specifically handle falls through to
+// entity.MessageTypeFile in ingestMessage, which is a safe default: it's
+// stored and visible in the conversation, just not something the AI
+// pipeline actively reasons about yet).
+type webhookAttachment struct {
+	Type    string                   `json:"type"`
+	Payload webhookAttachmentPayload `json:"payload"`
+}
+
+type webhookAttachmentPayload struct {
+	// URL is a Meta-hosted CDN link. It is NOT guaranteed long-lived —
+	// fetch it promptly (see internal/usecase/ai's image-download step)
+	// rather than persisting it for later use days out.
+	URL string `json:"url"`
 }
 
 // Process verifies the signature, records the delivery in webhook_logs
@@ -260,26 +288,31 @@ func (uc *WebhookUseCase) ingestMessage(ctx context.Context, igBusinessAccountID
 		return nil // already ingested — Meta redelivered; idempotent no-op
 	}
 
-	content := m.Message.Text
+	msgType, attachmentURL := classifyAttachment(m.Message.Attachments)
 	createdAt := time.UnixMilli(m.Timestamp)
 	msg := &entity.Message{
 		OrganizationID: account.OrganizationID,
 		ConversationID: conv.ID,
 		Direction:      entity.MessageDirectionInbound,
 		SenderType:     entity.MessageSenderCustomer,
-		MessageType:    entity.MessageTypeText,
-		Content:        &content,
+		MessageType:    msgType,
+		AttachmentURL:  attachmentURL,
 		IGMessageID:    &m.Message.MID,
 		CreatedAt:      createdAt,
+	}
+	// Content stays nil (not a pointer to "") when there's no caption text —
+	// internal/usecase/ai's empty-content gate and buildTranscript both key
+	// off nil to distinguish "no text" from "text that happens to be
+	// empty," and a non-nil-but-empty Content would defeat that.
+	if m.Message.Text != "" {
+		text := m.Message.Text
+		msg.Content = &text
 	}
 	if err := uc.messageRepo.Create(ctx, msg); err != nil {
 		return err
 	}
 
-	preview := content
-	if len(preview) > 140 {
-		preview = preview[:140]
-	}
+	preview := previewFor(msg)
 	conv.LastMessageAt = &createdAt
 	conv.LastMessagePreview = &preview
 	conv.UnreadCount++
@@ -293,4 +326,57 @@ func (uc *WebhookUseCase) ingestMessage(ctx context.Context, igBusinessAccountID
 		MessageID:          msg.ID.String(),
 		InstagramAccountID: account.ID.String(),
 	})
+}
+
+// classifyAttachment inspects the first attachment (see webhookAttachment's
+// doc comment on why only the first) and returns the entity.MessageType to
+// store plus the attachment's URL, or (MessageTypeText, nil) when there is
+// none — a plain text-only message.
+func classifyAttachment(attachments []webhookAttachment) (entity.MessageType, *string) {
+	if len(attachments) == 0 {
+		return entity.MessageTypeText, nil
+	}
+	att := attachments[0]
+	if att.Payload.URL == "" {
+		return entity.MessageTypeText, nil
+	}
+	url := att.Payload.URL
+	switch att.Type {
+	case "image":
+		return entity.MessageTypeImage, &url
+	case "video":
+		return entity.MessageTypeVideo, &url
+	case "audio":
+		return entity.MessageTypeAudio, &url
+	default:
+		return entity.MessageTypeFile, &url
+	}
+}
+
+// previewFor renders conversations.last_message_preview for the inbox list
+// view. Text messages preview their own content (unchanged behavior); an
+// attachment with no caption text previously had nothing to show here (the
+// preview was just always `m.Message.Text`, empty for every non-text
+// message) — a short bracketed label is a small but real UX fix on its
+// own, independent of whether the AI understands the attachment yet.
+func previewFor(msg *entity.Message) string {
+	if msg.Content != nil && *msg.Content != "" {
+		preview := *msg.Content
+		if len(preview) > 140 {
+			preview = preview[:140]
+		}
+		return preview
+	}
+	switch msg.MessageType {
+	case entity.MessageTypeImage:
+		return "[Image]"
+	case entity.MessageTypeVideo:
+		return "[Video]"
+	case entity.MessageTypeAudio:
+		return "[Voice message]"
+	case entity.MessageTypeFile:
+		return "[File]"
+	default:
+		return ""
+	}
 }

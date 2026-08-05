@@ -312,6 +312,55 @@ func (c *Client) SendMessage(ctx context.Context, accessToken, recipientIGID, te
 	return nil
 }
 
+// maxAttachmentBytes caps DownloadAttachment's response size. Gemini's
+// generateContent request body has its own ~20MB overall limit for inline
+// (non-Files-API) data, and a base64-encoded image is ~1.33x its raw
+// size — 15MB of raw bytes leaves headroom for the rest of the request
+// (system prompt, transcript) without needing to account for that
+// expansion precisely. A DM photo is normally a few hundred KB to a low
+// single-digit MB, so this should never bite in practice; it exists as a
+// backstop against an unexpectedly large file rather than a tuned limit.
+const maxAttachmentBytes = 15 * 1024 * 1024
+
+// DownloadAttachment fetches the raw bytes of a customer-sent attachment
+// (image/video/audio/file) from the CDN URL Meta's webhook delivered in
+// message.attachments[].payload.url — see webhookAttachmentPayload's doc
+// comment in internal/usecase/instagram on why that URL must be treated as
+// short-lived and fetched promptly rather than cached for later. No
+// access token is sent with this request: Meta's attachment CDN links are
+// themselves pre-signed/scoped, unlike the Graph API endpoints elsewhere
+// in this client that require ?access_token=.
+//
+// Returns the response's declared Content-Type as mimeType, trusted as-is
+// (not re-sniffed from the bytes) since Meta's CDN sets it correctly for
+// exactly the media types this pipeline cares about.
+func (c *Client) DownloadAttachment(ctx context.Context, url string) (data []byte, mimeType string, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, "", err
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		return nil, "", fmt.Errorf("download attachment: unexpected status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAttachmentBytes+1))
+	if err != nil {
+		return nil, "", fmt.Errorf("download attachment: %w", err)
+	}
+	if len(body) > maxAttachmentBytes {
+		return nil, "", fmt.Errorf("download attachment: exceeds %d byte limit", maxAttachmentBytes)
+	}
+
+	return body, resp.Header.Get("Content-Type"), nil
+}
+
 func (c *Client) doJSON(req *http.Request, out any) error {
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

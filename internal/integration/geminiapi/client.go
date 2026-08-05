@@ -11,10 +11,12 @@ package geminiapi
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -201,12 +203,30 @@ type thinkingConfig struct {
 }
 
 type generateContent struct {
-	Role  string             `json:"role,omitempty"`
-	Parts []generateTextPart `json:"parts"`
+	Role  string         `json:"role,omitempty"`
+	Parts []generatePart `json:"parts"`
 }
 
-type generateTextPart struct {
-	Text string `json:"text"`
+// generatePart is a union of Gemini's two part shapes this client sends:
+// plain text, or an inline (base64) media blob for multimodal input (see
+// GenerateWithImage). Exactly one of Text/InlineData should be set per
+// part — omitempty keeps the unused one out of the JSON entirely, since
+// Gemini's API rejects a part object with both empty and populated
+// mutually-exclusive fields present.
+type generatePart struct {
+	Text       string      `json:"text,omitempty"`
+	InlineData *inlineData `json:"inlineData,omitempty"`
+}
+
+// inlineData is Gemini's format for embedding raw media bytes directly in
+// the request (as opposed to the separate Files API, which uploads once
+// and references by URI — not used here since a DM attachment is fetched
+// once and used once, not worth a two-step upload-then-reference for
+// this codebase's ~one-shot use). MimeType must be one Gemini recognizes
+// for the model in use; Data is standard base64, no data-URL prefix.
+type inlineData struct {
+	MimeType string `json:"mimeType"`
+	Data     string `json:"data"`
 }
 
 type generateResponse struct {
@@ -228,18 +248,44 @@ type GenerateUsage struct {
 	CompletionTokens int
 }
 
-// Generate calls gemini-2.0-flash with a system prompt (the knowledge-base
-// context + instructions) and a single user turn (the customer's
-// message), returning the model's plain-text reply plus token usage. No
-// multi-turn history or function calling here — internal/usecase/ai.UseCase
-// is what decides what goes into systemPrompt (retrieved chunks, tone
-// instructions, etc.) and userMessage (the conversation transcript), this
-// client is deliberately just the transport.
+// Generate calls Gemini with a system prompt (the knowledge-base context +
+// instructions) and a single user turn (the customer's message), returning
+// the model's plain-text reply plus token usage. No multi-turn history or
+// function calling here — internal/usecase/ai.UseCase is what decides what
+// goes into systemPrompt (retrieved chunks, tone instructions, etc.) and
+// userMessage (the conversation transcript), this client is deliberately
+// just the transport.
 func (c *Client) Generate(ctx context.Context, systemPrompt, userMessage string) (string, GenerateUsage, error) {
+	return c.generate(ctx, systemPrompt, []generatePart{{Text: userMessage}})
+}
+
+// GenerateWithImage is Generate's multimodal sibling: the user turn carries
+// an inline image alongside (optionally empty) text, so Gemini reasons
+// about both together in one call — used when internal/usecase/ai
+// determines the customer's latest message is an image (see
+// ai.UseCase.HandleInboundMessage). userMessage may be "" (an image with no
+// caption); imageData is the raw downloaded bytes (not base64 yet — that
+// happens here) and imageMimeType is whatever the source served (e.g.
+// "image/jpeg"), passed straight through to Gemini rather than re-detected,
+// since re-sniffing content-type from bytes is one more way to get it
+// wrong for no benefit.
+func (c *Client) GenerateWithImage(ctx context.Context, systemPrompt, userMessage string, imageData []byte, imageMimeType string) (string, GenerateUsage, error) {
+	parts := make([]generatePart, 0, 2)
+	if strings.TrimSpace(userMessage) != "" {
+		parts = append(parts, generatePart{Text: userMessage})
+	}
+	parts = append(parts, generatePart{InlineData: &inlineData{
+		MimeType: imageMimeType,
+		Data:     base64.StdEncoding.EncodeToString(imageData),
+	}})
+	return c.generate(ctx, systemPrompt, parts)
+}
+
+func (c *Client) generate(ctx context.Context, systemPrompt string, parts []generatePart) (string, GenerateUsage, error) {
 	reqBody, err := json.Marshal(generateRequest{
-		SystemInstruction: &generateContent{Parts: []generateTextPart{{Text: systemPrompt}}},
+		SystemInstruction: &generateContent{Parts: []generatePart{{Text: systemPrompt}}},
 		Contents: []generateContent{
-			{Role: "user", Parts: []generateTextPart{{Text: userMessage}}},
+			{Role: "user", Parts: parts},
 		},
 		// See generationConfig's doc comment: thinking is pure overhead for
 		// a short conversational DM reply.

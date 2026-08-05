@@ -83,6 +83,27 @@ type Generator interface {
 	Generate(ctx context.Context, systemPrompt, userMessage string) (string, geminiapi.GenerateUsage, error)
 }
 
+// ImageGenerator is Generator's multimodal counterpart — satisfied by
+// internal/integration/geminiapi.Client.GenerateWithImage. Kept as its own
+// narrow interface (rather than adding the method to Generator) so a fake
+// Generator used in tests for the plain-text path doesn't also have to
+// implement image support it never exercises.
+type ImageGenerator interface {
+	GenerateWithImage(ctx context.Context, systemPrompt, userMessage string, imageData []byte, imageMimeType string) (string, geminiapi.GenerateUsage, error)
+}
+
+// MediaFetcher is the narrow port onto downloading a customer-sent
+// attachment's bytes — satisfied by internal/integration/metaapi.Client.DownloadAttachment.
+// See HandleInboundMessage's image-handling branch for why this fetch
+// happens here (at reply-generation time) rather than at webhook-ingestion
+// time: the attachment URL is short-lived, and ingestion (cmd/api) is
+// meant to stay fast/thin — the actual Gemini call already happens in this
+// worker, so fetching the bytes right before that call keeps the "URL
+// might be stale" window as small as possible.
+type MediaFetcher interface {
+	DownloadAttachment(ctx context.Context, url string) (data []byte, mimeType string, err error)
+}
+
 // Retriever is the RAG retrieval port — internal/usecase/knowledgebase.UseCase
 // satisfies it via its own Search method.
 type Retriever interface {
@@ -151,6 +172,8 @@ type UseCase struct {
 	products    ProductLister
 	click       ClickIntegrationLookup
 	leads       Leads
+	imageGen    ImageGenerator
+	media       MediaFetcher
 }
 
 func New(
@@ -165,6 +188,8 @@ func New(
 	products ProductLister,
 	click ClickIntegrationLookup,
 	leads Leads,
+	imageGen ImageGenerator,
+	media MediaFetcher,
 ) *UseCase {
 	return &UseCase{
 		convRepo:    convRepo,
@@ -178,6 +203,8 @@ func New(
 		products:    products,
 		click:       click,
 		leads:       leads,
+		imageGen:    imageGen,
+		media:       media,
 	}
 }
 
@@ -224,16 +251,32 @@ func (uc *UseCase) HandleInboundMessage(ctx context.Context, ev InboundEvent) er
 	}
 
 	latest := findMessage(history, ev.MessageID)
-	if latest == nil || latest.Content == nil || strings.TrimSpace(*latest.Content) == "" {
-		// Nothing to respond to — e.g. an image/story-reply with no text
-		// content, or (shouldn't happen, but fail safe) the event's message
-		// isn't in the fetched history window.
+	hasText := latest != nil && latest.Content != nil && strings.TrimSpace(*latest.Content) != ""
+	// isImage additionally requires imageGen/media to be wired — if either
+	// is nil (e.g. a test double that only fakes the text path), this
+	// falls through to hasText-only handling below instead of panicking on
+	// a nil interface call.
+	isImage := latest != nil && latest.MessageType == entity.MessageTypeImage &&
+		latest.AttachmentURL != nil && uc.imageGen != nil && uc.media != nil
+	if !hasText && !isImage {
+		// Nothing to respond to — e.g. a video/audio/file attachment with no
+		// caption (image support landed; those are next), or (shouldn't
+		// happen, but fail safe) the event's message isn't in the fetched
+		// history window.
 		return nil
 	}
 
-	hits, err := uc.retriever.Search(ctx, ev.OrganizationID, *latest.Content, retrievalLimit)
-	if err != nil {
-		return err
+	// RAG retrieval needs real text to embed and search against. An
+	// image-only message (no caption) has none — hits stays empty and
+	// buildSystemPrompt falls back to its "(no context available)"
+	// placeholder, same as any other ungrounded turn. Once there IS text
+	// (a caption, or this is a text message), search on it as before.
+	var hits []repository.ChunkSearchResult
+	if hasText {
+		hits, err = uc.retriever.Search(ctx, ev.OrganizationID, *latest.Content, retrievalLimit)
+		if err != nil {
+			return err
+		}
 	}
 
 	// confidence is still computed and still recorded on the ai_responses row
@@ -255,7 +298,28 @@ func (uc *UseCase) HandleInboundMessage(ctx context.Context, ev InboundEvent) er
 	transcript := buildTranscript(history)
 
 	start := time.Now()
-	replyText, usage, err := uc.generator.Generate(ctx, systemPrompt, transcript)
+	var replyText string
+	var usage geminiapi.GenerateUsage
+	switch {
+	case isImage:
+		imageData, mimeType, dlErr := uc.media.DownloadAttachment(ctx, *latest.AttachmentURL)
+		switch {
+		case dlErr == nil:
+			replyText, usage, err = uc.imageGen.GenerateWithImage(ctx, systemPrompt, transcript, imageData, mimeType)
+		case hasText:
+			// Couldn't fetch the image — likely the CDN URL had already
+			// expired by the time this worker picked up the event (see
+			// MediaFetcher's doc comment) — but there's still a caption or
+			// prior conversation to answer from. Degrade to the text-only
+			// path rather than failing the whole reply over a media fetch.
+			replyText, usage, err = uc.generator.Generate(ctx, systemPrompt, transcript)
+		default:
+			// No usable image, no text — nothing to reply from.
+			return uc.handoff(ctx, conv)
+		}
+	default:
+		replyText, usage, err = uc.generator.Generate(ctx, systemPrompt, transcript)
+	}
 	latencyMs := int(time.Since(start).Milliseconds())
 	if err != nil {
 		return apperror.Internal("generate ai reply", err)
@@ -323,8 +387,11 @@ func (uc *UseCase) HandleInboundMessage(ctx context.Context, ev InboundEvent) er
 
 	// Best-effort, after the customer already has their reply — a failure
 	// here must never look like a failure to respond. See
-	// captureLeadIfPresent's doc comment.
-	uc.captureLeadIfPresent(ctx, conv, *latest.Content, history)
+	// captureLeadIfPresent's doc comment. derefOr guards against latest
+	// being an image-only message with no Content (nil) — a phone number
+	// obviously can't appear in text that doesn't exist, so this just
+	// safely no-ops via extractPhone finding nothing in "".
+	uc.captureLeadIfPresent(ctx, conv, derefOr(latest.Content, ""), history)
 
 	return uc.updateConversationAfterReply(ctx, conv, replyText)
 }
@@ -554,6 +621,7 @@ Rules:
 - Match the customer's language and tone (e.g. reply in Uzbek if they wrote in Uzbek).
 - Do not mention that you are an AI, a language model, or that you're using "context" or "documents" — just answer naturally, like a person on the team would.
 - Payment links are dangerous to get wrong: only ever send a URL that appears character-for-character in the "Products" section below. NEVER type out, construct, guess, modify, or shorten a payment link yourself, even partially — copy it exactly or don't send one. If a customer wants to pay for something that either isn't in the Products list, or is listed there WITHOUT a payment link, do not invent one — tell them warmly that a team member will send payment details shortly.
+- When the customer's latest message includes a photo, actually look at it and respond to what's in it as a natural part of the conversation — it might be a product they're asking about, a screenshot of a question, a payment receipt, a size/color they're showing you, etc. Don't ignore the image and only answer any accompanying text.
 
 Products:
 %s
@@ -669,14 +737,27 @@ func buildTranscript(history []*entity.Message) string {
 	var b strings.Builder
 	for i := len(history) - 1; i >= 0; i-- {
 		m := history[i]
-		if m.Content == nil || strings.TrimSpace(*m.Content) == "" {
-			continue
-		}
 		speaker := "Customer"
 		if m.Direction == entity.MessageDirectionOutbound {
 			speaker = "You"
 		}
-		fmt.Fprintf(&b, "%s: %s\n", speaker, *m.Content)
+		switch {
+		case m.Content != nil && strings.TrimSpace(*m.Content) != "":
+			fmt.Fprintf(&b, "%s: %s\n", speaker, *m.Content)
+		case m.MessageType == entity.MessageTypeImage:
+			// A captionless image previously vanished from the transcript
+			// entirely (this branch used to just `continue` on empty
+			// Content) — leaving a marker means a later text-only reply in
+			// the same conversation still has a record that a photo was
+			// sent, even though this function only carries plain text and
+			// can't re-embed the image itself here (the image bytes are
+			// sent to Gemini separately — see HandleInboundMessage's isImage
+			// branch — only for the turn currently being answered).
+			fmt.Fprintf(&b, "%s: [sent a photo]\n", speaker)
+		default:
+			// Video/audio/file with no caption, or any other empty-content
+			// message — nothing textual to contribute yet.
+		}
 	}
 	return strings.TrimSpace(b.String())
 }
