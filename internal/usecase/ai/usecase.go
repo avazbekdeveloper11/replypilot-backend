@@ -83,18 +83,22 @@ type Generator interface {
 	Generate(ctx context.Context, systemPrompt, userMessage string) (string, geminiapi.GenerateUsage, error)
 }
 
-// ImageGenerator is Generator's multimodal counterpart — satisfied by
-// internal/integration/geminiapi.Client.GenerateWithImage. Kept as its own
+// MediaGenerator is Generator's multimodal counterpart — satisfied by
+// internal/integration/geminiapi.Client.GenerateWithMedia. Kept as its own
 // narrow interface (rather than adding the method to Generator) so a fake
 // Generator used in tests for the plain-text path doesn't also have to
-// implement image support it never exercises.
-type ImageGenerator interface {
-	GenerateWithImage(ctx context.Context, systemPrompt, userMessage string, imageData []byte, imageMimeType string) (string, geminiapi.GenerateUsage, error)
+// implement media support it never exercises. Covers both images and voice
+// messages (see HandleInboundMessage's isMedia) — Gemini's request shape is
+// identical for both, only the mimeType differs, so one interface/method
+// serves both rather than ImageGenerator/AudioGenerator duplicating each
+// other.
+type MediaGenerator interface {
+	GenerateWithMedia(ctx context.Context, systemPrompt, userMessage string, mediaData []byte, mediaMimeType string) (string, geminiapi.GenerateUsage, error)
 }
 
 // MediaFetcher is the narrow port onto downloading a customer-sent
 // attachment's bytes — satisfied by internal/integration/metaapi.Client.DownloadAttachment.
-// See HandleInboundMessage's image-handling branch for why this fetch
+// See HandleInboundMessage's media-handling branch for why this fetch
 // happens here (at reply-generation time) rather than at webhook-ingestion
 // time: the attachment URL is short-lived, and ingestion (cmd/api) is
 // meant to stay fast/thin — the actual Gemini call already happens in this
@@ -172,7 +176,7 @@ type UseCase struct {
 	products    ProductLister
 	click       ClickIntegrationLookup
 	leads       Leads
-	imageGen    ImageGenerator
+	mediaGen    MediaGenerator
 	media       MediaFetcher
 }
 
@@ -188,7 +192,7 @@ func New(
 	products ProductLister,
 	click ClickIntegrationLookup,
 	leads Leads,
-	imageGen ImageGenerator,
+	mediaGen MediaGenerator,
 	media MediaFetcher,
 ) *UseCase {
 	return &UseCase{
@@ -203,7 +207,7 @@ func New(
 		products:    products,
 		click:       click,
 		leads:       leads,
-		imageGen:    imageGen,
+		mediaGen:    mediaGen,
 		media:       media,
 	}
 }
@@ -252,17 +256,20 @@ func (uc *UseCase) HandleInboundMessage(ctx context.Context, ev InboundEvent) er
 
 	latest := findMessage(history, ev.MessageID)
 	hasText := latest != nil && latest.Content != nil && strings.TrimSpace(*latest.Content) != ""
-	// isImage additionally requires imageGen/media to be wired — if either
-	// is nil (e.g. a test double that only fakes the text path), this
-	// falls through to hasText-only handling below instead of panicking on
-	// a nil interface call.
-	isImage := latest != nil && latest.MessageType == entity.MessageTypeImage &&
-		latest.AttachmentURL != nil && uc.imageGen != nil && uc.media != nil
-	if !hasText && !isImage {
-		// Nothing to respond to — e.g. a video/audio/file attachment with no
-		// caption (image support landed; those are next), or (shouldn't
-		// happen, but fail safe) the event's message isn't in the fetched
-		// history window.
+	// isMedia covers images and voice messages — both go through the same
+	// Gemini multimodal path (see MediaGenerator's doc comment); video/file
+	// attachments are deliberately excluded here, next in line but not
+	// built yet. Additionally requires mediaGen/media to be wired — if
+	// either is nil (e.g. a test double that only fakes the text path),
+	// this falls through to hasText-only handling below instead of
+	// panicking on a nil interface call.
+	isMedia := latest != nil &&
+		(latest.MessageType == entity.MessageTypeImage || latest.MessageType == entity.MessageTypeAudio) &&
+		latest.AttachmentURL != nil && uc.mediaGen != nil && uc.media != nil
+	if !hasText && !isMedia {
+		// Nothing to respond to — e.g. a video/file attachment with no
+		// caption, or (shouldn't happen, but fail safe) the event's message
+		// isn't in the fetched history window.
 		return nil
 	}
 
@@ -301,20 +308,21 @@ func (uc *UseCase) HandleInboundMessage(ctx context.Context, ev InboundEvent) er
 	var replyText string
 	var usage geminiapi.GenerateUsage
 	switch {
-	case isImage:
-		imageData, mimeType, dlErr := uc.media.DownloadAttachment(ctx, *latest.AttachmentURL)
+	case isMedia:
+		mediaData, mimeType, dlErr := uc.media.DownloadAttachment(ctx, *latest.AttachmentURL)
 		switch {
 		case dlErr == nil:
-			replyText, usage, err = uc.imageGen.GenerateWithImage(ctx, systemPrompt, transcript, imageData, mimeType)
+			replyText, usage, err = uc.mediaGen.GenerateWithMedia(ctx, systemPrompt, transcript, mediaData, mimeType)
 		case hasText:
-			// Couldn't fetch the image — likely the CDN URL had already
-			// expired by the time this worker picked up the event (see
-			// MediaFetcher's doc comment) — but there's still a caption or
-			// prior conversation to answer from. Degrade to the text-only
-			// path rather than failing the whole reply over a media fetch.
+			// Couldn't fetch the attachment — likely the CDN URL had
+			// already expired by the time this worker picked up the event
+			// (see MediaFetcher's doc comment) — but there's still a
+			// caption or prior conversation to answer from. Degrade to the
+			// text-only path rather than failing the whole reply over a
+			// media fetch.
 			replyText, usage, err = uc.generator.Generate(ctx, systemPrompt, transcript)
 		default:
-			// No usable image, no text — nothing to reply from.
+			// No usable media, no text — nothing to reply from.
 			return uc.handoff(ctx, conv)
 		}
 	default:
@@ -622,6 +630,7 @@ Rules:
 - Do not mention that you are an AI, a language model, or that you're using "context" or "documents" — just answer naturally, like a person on the team would.
 - Payment links are dangerous to get wrong: only ever send a URL that appears character-for-character in the "Products" section below. NEVER type out, construct, guess, modify, or shorten a payment link yourself, even partially — copy it exactly or don't send one. If a customer wants to pay for something that either isn't in the Products list, or is listed there WITHOUT a payment link, do not invent one — tell them warmly that a team member will send payment details shortly.
 - When the customer's latest message includes a photo, actually look at it and respond to what's in it as a natural part of the conversation — it might be a product they're asking about, a screenshot of a question, a payment receipt, a size/color they're showing you, etc. Don't ignore the image and only answer any accompanying text.
+- When the customer's latest message is a voice message, actually listen to it and respond to what they said, the same as if they'd typed it — including matching whatever language they spoke in, not just the language of earlier text in this conversation.
 
 Products:
 %s
@@ -745,17 +754,20 @@ func buildTranscript(history []*entity.Message) string {
 		case m.Content != nil && strings.TrimSpace(*m.Content) != "":
 			fmt.Fprintf(&b, "%s: %s\n", speaker, *m.Content)
 		case m.MessageType == entity.MessageTypeImage:
-			// A captionless image previously vanished from the transcript
-			// entirely (this branch used to just `continue` on empty
-			// Content) — leaving a marker means a later text-only reply in
-			// the same conversation still has a record that a photo was
-			// sent, even though this function only carries plain text and
-			// can't re-embed the image itself here (the image bytes are
-			// sent to Gemini separately — see HandleInboundMessage's isImage
-			// branch — only for the turn currently being answered).
+			// A captionless image/voice message previously vanished from
+			// the transcript entirely (this branch used to just `continue`
+			// on empty Content) — leaving a marker means a later text-only
+			// reply in the same conversation still has a record that
+			// something was sent, even though this function only carries
+			// plain text and can't re-embed the media itself here (the
+			// media bytes are sent to Gemini separately — see
+			// HandleInboundMessage's isMedia branch — only for the turn
+			// currently being answered).
 			fmt.Fprintf(&b, "%s: [sent a photo]\n", speaker)
+		case m.MessageType == entity.MessageTypeAudio:
+			fmt.Fprintf(&b, "%s: [sent a voice message]\n", speaker)
 		default:
-			// Video/audio/file with no caption, or any other empty-content
+			// Video/file with no caption, or any other empty-content
 			// message — nothing textual to contribute yet.
 		}
 	}

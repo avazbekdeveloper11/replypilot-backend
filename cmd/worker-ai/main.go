@@ -109,10 +109,11 @@ func run() error {
 	// retrieval-only constructor.
 	knowledgeUseCase := knowledgebaseuc.New(knowledgeDocRepo, knowledgeChunkRepo, geminiClient)
 	// geminiClient and metaClient are passed twice each: once for their
-	// primary port (Generator, Sender) and again for the image-reply ports
-	// (ImageGenerator, MediaFetcher) — same concrete client, satisfying two
-	// narrow interfaces, not two separate instances. See aiuc.ImageGenerator
-	// and aiuc.MediaFetcher's doc comments.
+	// primary port (Generator, Sender) and again for the multimodal
+	// (image + voice message) ports (MediaGenerator, MediaFetcher) — same
+	// concrete client, satisfying two narrow interfaces, not two separate
+	// instances. See aiuc.MediaGenerator and aiuc.MediaFetcher's doc
+	// comments.
 	aiUseCase := aiuc.New(convRepo, msgRepo, accountRepo, aiRespRepo, knowledgeUseCase, geminiClient, metaClient, encryptor, productRepo, clickIntegrationRepo, leadRepo, geminiClient, metaClient)
 	platformSettingsUseCase := platformsettingsuc.New(platformSettingsRepo, encryptor)
 

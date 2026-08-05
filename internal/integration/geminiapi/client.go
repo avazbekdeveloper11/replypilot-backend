@@ -209,7 +209,7 @@ type generateContent struct {
 
 // generatePart is a union of Gemini's two part shapes this client sends:
 // plain text, or an inline (base64) media blob for multimodal input (see
-// GenerateWithImage). Exactly one of Text/InlineData should be set per
+// GenerateWithMedia). Exactly one of Text/InlineData should be set per
 // part — omitempty keeps the unused one out of the JSON entirely, since
 // Gemini's API rejects a part object with both empty and populated
 // mutually-exclusive fields present.
@@ -259,24 +259,39 @@ func (c *Client) Generate(ctx context.Context, systemPrompt, userMessage string)
 	return c.generate(ctx, systemPrompt, []generatePart{{Text: userMessage}})
 }
 
-// GenerateWithImage is Generate's multimodal sibling: the user turn carries
-// an inline image alongside (optionally empty) text, so Gemini reasons
-// about both together in one call — used when internal/usecase/ai
-// determines the customer's latest message is an image (see
-// ai.UseCase.HandleInboundMessage). userMessage may be "" (an image with no
-// caption); imageData is the raw downloaded bytes (not base64 yet — that
-// happens here) and imageMimeType is whatever the source served (e.g.
-// "image/jpeg"), passed straight through to Gemini rather than re-detected,
-// since re-sniffing content-type from bytes is one more way to get it
-// wrong for no benefit.
-func (c *Client) GenerateWithImage(ctx context.Context, systemPrompt, userMessage string, imageData []byte, imageMimeType string) (string, GenerateUsage, error) {
+// GenerateWithMedia is Generate's multimodal sibling: the user turn carries
+// one inline media blob alongside (optionally empty) text, so Gemini
+// reasons about both together in one call — used when internal/usecase/ai
+// determines the customer's latest message is an image or a voice message
+// (see ai.UseCase.HandleInboundMessage). Originally named GenerateWithImage
+// and image-only; generalized once voice support needed the exact same
+// request shape — Gemini's inlineData mechanism doesn't care whether the
+// bytes are a photo or an audio clip, only mediaMimeType changes.
+//
+// userMessage may be "" (media with no caption); mediaData is the raw
+// downloaded bytes (not base64 yet — that happens here) and mediaMimeType
+// is whatever the source served (e.g. "image/jpeg", "audio/mp4"), passed
+// straight through to Gemini rather than re-detected, since re-sniffing
+// content-type from bytes is one more way to get it wrong for no benefit.
+//
+// Audio caveat: Gemini's documented natively-supported audio MIME types
+// are wav/mp3/aiff/aac/ogg/flac (ai.google.dev/gemini-api/docs/audio).
+// Instagram voice-message attachments have not been confirmed live against
+// this project's key as of this writing — if Meta's CDN serves a
+// Content-Type Gemini rejects, this call returns an error, which
+// HandleInboundMessage's isMedia branch already degrades out of safely
+// (falls back to a text-only reply if there's a caption/history, or hands
+// off to a human otherwise) rather than crashing the pipeline. Worth
+// checking real logs after this ships, same spirit as GenerationModel's
+// doc comment on why "confirmed live" matters more than what docs claim.
+func (c *Client) GenerateWithMedia(ctx context.Context, systemPrompt, userMessage string, mediaData []byte, mediaMimeType string) (string, GenerateUsage, error) {
 	parts := make([]generatePart, 0, 2)
 	if strings.TrimSpace(userMessage) != "" {
 		parts = append(parts, generatePart{Text: userMessage})
 	}
 	parts = append(parts, generatePart{InlineData: &inlineData{
-		MimeType: imageMimeType,
-		Data:     base64.StdEncoding.EncodeToString(imageData),
+		MimeType: mediaMimeType,
+		Data:     base64.StdEncoding.EncodeToString(mediaData),
 	}})
 	return c.generate(ctx, systemPrompt, parts)
 }
