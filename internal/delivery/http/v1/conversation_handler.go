@@ -237,6 +237,52 @@ func (h *ConversationHandler) Resolve(c *gin.Context) {
 	response.OK(c, toConversationResponse(conv))
 }
 
+// SendMessage godoc
+// @Summary      Send a message as a human agent
+// @Description  Only valid once the conversation is human_active — see usecase.SendMessage's doc comment. Take over first (PATCH .../take-over) if it isn't yet.
+// @Tags         conversations
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id path string true "Conversation ID"
+// @Param        request body SendMessageRequest true "Message content"
+// @Success      200 {object} response.Envelope{data=MessageResponse}
+// @Failure      400 {object} response.Envelope
+// @Failure      404 {object} response.Envelope
+// @Router       /v1/conversations/{id}/messages [post]
+func (h *ConversationHandler) SendMessage(c *gin.Context) {
+	orgID, err := orgIDFromContext(c)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+	userID, err := userIDFromContext(c)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.Error(apperror.InvalidInput("invalid conversation id", err))
+		return
+	}
+
+	var req SendMessageRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.Error(apperror.InvalidInput("invalid request body", err))
+		return
+	}
+
+	msg, err := h.uc.SendMessage(c.Request.Context(), orgID, id, userID, req.Content)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+
+	response.OK(c, toMessageResponse(msg))
+}
+
 func toConversationResponse(conv *entity.Conversation) ConversationResponse {
 	resp := ConversationResponse{
 		ID:                 conv.ID.String(),

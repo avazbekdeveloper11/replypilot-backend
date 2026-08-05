@@ -123,6 +123,7 @@ func NewRouter(h Handlers, mw Middlewares) *gin.Engine {
 			protected.GET("/conversations", h.Conversation.List)
 			protected.GET("/conversations/:id", h.Conversation.Get)
 			protected.GET("/conversations/:id/messages", h.Conversation.ListMessages)
+			protected.POST("/conversations/:id/messages", h.Conversation.SendMessage)
 			protected.PATCH("/conversations/:id/take-over", h.Conversation.TakeOver)
 			protected.PATCH("/conversations/:id/resolve", h.Conversation.Resolve)
 

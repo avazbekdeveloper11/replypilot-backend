@@ -156,7 +156,7 @@ func New(cfg *config.Config) (*Container, error) {
 	orgUseCase := organizationuc.New(orgRepo)
 	oauthUseCase := instagramuc.NewOAuthUseCase(instagramAccountRepo, graphClient, oauthStateStore, encryptor, cfg.Meta.AppID, cfg.Meta.RedirectURL)
 	webhookUseCase := instagramuc.NewWebhookUseCase(webhookLogRepo, instagramAccountRepo, conversationRepo, messageRepo, publisher, graphClient, encryptor, cfg.Meta.AppSecret, cfg.Meta.WebhookVerifyToken, logger)
-	conversationUseCase := conversationuc.New(conversationRepo, messageRepo)
+	conversationUseCase := conversationuc.New(conversationRepo, messageRepo, instagramAccountRepo, graphClient, encryptor)
 	dashboardUseCase := dashboarduc.New(dashboardRepo, conversationRepo, instagramAccountRepo)
 	teamUseCase := teamuc.New(teamMemberRepo, userRepo, roleRepo)
 	knowledgeUseCase := knowledgebaseuc.New(knowledgeDocRepo, knowledgeChunkRepo, geminiClient)

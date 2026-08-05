@@ -335,6 +335,13 @@ type MessageResponse struct {
 	CreatedAt  string  `json:"created_at"`
 }
 
+// SendMessageRequest is a human agent's reply from the dashboard — see
+// conversation.UseCase.SendMessage's doc comment on why this only succeeds
+// once the conversation is human_active (take over first).
+type SendMessageRequest struct {
+	Content string `json:"content" binding:"required,min=1,max=1000"`
+}
+
 type DashboardStatsResponse struct {
 	TotalConversations         int64    `json:"total_conversations"`
 	AIActiveConversations      int64    `json:"ai_active_conversations"`
