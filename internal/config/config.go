@@ -22,6 +22,7 @@ type Config struct {
 	RabbitMQ  RabbitMQConfig
 	JWT       JWTConfig
 	Meta      MetaConfig
+	Telegram  TelegramConfig
 	Gemini    GeminiConfig
 	Stripe    StripeConfig
 	Security  SecurityConfig
@@ -75,6 +76,27 @@ type MetaConfig struct {
 	RedirectURL        string
 	WebhookVerifyToken string
 	GraphAPIBaseURL    string
+}
+
+// TelegramConfig holds the shared infrastructure Telegram bot connections
+// need — same "boots without it, feature errors until configured"
+// philosophy as GeminiConfig/StripeConfig below, not mustGetEnv (a
+// deployment that never uses Telegram shouldn't fail to start over it).
+//
+// WebhookSecret is deliberately ONE value shared across every organization's
+// bot, not one per bot — Telegram's setWebhook secret_token exists to prove
+// a delivery genuinely came from Telegram, not to distinguish between
+// organizations (the URL path already does that, see
+// telegram_webhook_handler.go). A per-bot secret would need its own storage
+// and only adds defense against an attacker who can already guess a
+// specific org's random account UUID, which the URL alone already resists.
+type TelegramConfig struct {
+	// WebhookBaseURL is this API service's own public base URL — used to
+	// build the webhook URL passed to Telegram's setWebhook (see
+	// telegram.ConnectUseCase.Connect), the same role META_REDIRECT_URL
+	// plays for Instagram's OAuth callback.
+	WebhookBaseURL string
+	WebhookSecret  string
 }
 
 // GeminiConfig holds the one secret needed to call Google's Gemini API —
@@ -175,6 +197,10 @@ func Load() (*Config, error) {
 			RedirectURL:        mustGetEnv("META_REDIRECT_URL"),
 			WebhookVerifyToken: mustGetEnv("META_WEBHOOK_VERIFY_TOKEN"),
 			GraphAPIBaseURL:    getEnv("META_GRAPH_API_BASE_URL", "https://graph.instagram.com"),
+		},
+		Telegram: TelegramConfig{
+			WebhookBaseURL: getEnv("TELEGRAM_WEBHOOK_BASE_URL", ""),
+			WebhookSecret:  getEnv("TELEGRAM_WEBHOOK_SECRET", ""),
 		},
 		Gemini: GeminiConfig{
 			APIKey: getEnv("GEMINI_API_KEY", ""),

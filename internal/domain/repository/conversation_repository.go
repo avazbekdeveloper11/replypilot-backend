@@ -35,6 +35,13 @@ type ConversationRepository interface {
 	// compliant with the row-level-security policy on conversations
 	// instead of needing its own bypass.
 	FindByAccountAndCustomer(ctx context.Context, orgID, instagramAccountID uuid.UUID, customerIGID string) (*entity.Conversation, error)
+	// FindByTelegramAccountAndCustomer is FindByAccountAndCustomer's
+	// Telegram-channel counterpart — kept as its own method (rather than
+	// overloading FindByAccountAndCustomer's instagramAccountID param) so
+	// the postgres implementation can filter on channel = 'telegram'
+	// explicitly instead of relying on callers never mixing up which kind
+	// of account id they're passing.
+	FindByTelegramAccountAndCustomer(ctx context.Context, orgID, telegramAccountID uuid.UUID, customerChatID string) (*entity.Conversation, error)
 	List(ctx context.Context, params ConversationListParams) ([]*entity.Conversation, error)
 	Update(ctx context.Context, conv *entity.Conversation) error
 }

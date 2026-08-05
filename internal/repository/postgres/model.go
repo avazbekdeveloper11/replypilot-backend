@@ -97,10 +97,35 @@ type InstagramAccountModel struct {
 
 func (InstagramAccountModel) TableName() string { return "instagram_accounts" }
 
+// TelegramAccountModel maps telegram_accounts — see migration 000014 and
+// entity.TelegramAccount's doc comment for what this table is.
+type TelegramAccountModel struct {
+	ID                   uuid.UUID      `gorm:"column:id;type:uuid;primaryKey"`
+	OrganizationID       uuid.UUID      `gorm:"column:organization_id;type:uuid"`
+	BotTokenEncrypted    []byte         `gorm:"column:bot_token_encrypted"`
+	BotUsername          *string        `gorm:"column:bot_username"`
+	BusinessConnectionID *string        `gorm:"column:business_connection_id"`
+	Status               string         `gorm:"column:status"`
+	ConnectedByUserID    *uuid.UUID     `gorm:"column:connected_by_user_id;type:uuid"`
+	CreatedAt            time.Time      `gorm:"column:created_at"`
+	UpdatedAt            time.Time      `gorm:"column:updated_at"`
+	DeletedAt            gorm.DeletedAt `gorm:"column:deleted_at;index"`
+}
+
+func (TelegramAccountModel) TableName() string { return "telegram_accounts" }
+
+// ConversationModel's InstagramAccountID/TelegramAccountID are both
+// pointer-typed at the GORM level (unlike entity.Conversation, where only
+// TelegramAccountID is a pointer) purely so a nil one maps to a SQL NULL on
+// write — see conversationToModel/modelToConversation for the translation
+// to/from entity.Conversation's non-pointer InstagramAccountID, which stays
+// uuid.Nil (never actually read) on a Telegram-channel row.
 type ConversationModel struct {
 	ID                  uuid.UUID      `gorm:"column:id;type:uuid;primaryKey"`
 	OrganizationID      uuid.UUID      `gorm:"column:organization_id;type:uuid"`
-	InstagramAccountID  uuid.UUID      `gorm:"column:instagram_account_id;type:uuid"`
+	InstagramAccountID  *uuid.UUID     `gorm:"column:instagram_account_id;type:uuid"`
+	TelegramAccountID   *uuid.UUID     `gorm:"column:telegram_account_id;type:uuid"`
+	Channel             string         `gorm:"column:channel"`
 	CustomerIGID        string         `gorm:"column:customer_ig_id"`
 	CustomerUsername    *string        `gorm:"column:customer_username"`
 	Status              string         `gorm:"column:status"`

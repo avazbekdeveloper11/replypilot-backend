@@ -21,7 +21,9 @@ type Handlers struct {
 	Auth         *v1.AuthHandler
 	Organization *v1.OrganizationHandler
 	Instagram    *v1.InstagramHandler
+	Telegram     *v1.TelegramHandler
 	Webhook      *v1.WebhookHandler
+	TelegramWebhook *v1.TelegramWebhookHandler
 	Conversation *v1.ConversationHandler
 	Dashboard    *v1.DashboardHandler
 	Team         *v1.TeamHandler
@@ -81,6 +83,10 @@ func NewRouter(h Handlers, mw Middlewares) *gin.Engine {
 	webhooks.GET("/meta", h.Webhook.VerifySubscription)
 	webhooks.POST("/meta", h.Webhook.Receive)
 	webhooks.POST("/stripe", h.Billing.Webhook)
+	// No JWT, same reasoning as /webhooks/meta above — Telegram is not a
+	// logged-in user either. Authenticated via the X-Telegram-Bot-Api-Secret-Token
+	// header instead (see TelegramWebhookHandler.Receive / config.TelegramConfig).
+	webhooks.POST("/telegram/:id", h.TelegramWebhook.Receive)
 
 	v1Group := r.Group("/v1")
 	{
@@ -119,6 +125,10 @@ func NewRouter(h Handlers, mw Middlewares) *gin.Engine {
 			protected.POST("/instagram/connect", h.Instagram.Connect)
 			protected.GET("/instagram/accounts", h.Instagram.List)
 			protected.DELETE("/instagram/accounts/:id", h.Instagram.Disconnect)
+
+			protected.POST("/telegram/connect", h.Telegram.Connect)
+			protected.GET("/telegram/accounts", h.Telegram.List)
+			protected.DELETE("/telegram/accounts/:id", h.Telegram.Disconnect)
 
 			protected.GET("/conversations", h.Conversation.List)
 			protected.GET("/conversations/:id", h.Conversation.Get)

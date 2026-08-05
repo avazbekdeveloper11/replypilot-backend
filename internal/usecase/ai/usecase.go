@@ -104,6 +104,16 @@ type MediaGenerator interface {
 // meant to stay fast/thin — the actual Gemini call already happens in this
 // worker, so fetching the bytes right before that call keeps the "URL
 // might be stale" window as small as possible.
+//
+// cmd/worker-ai wires the same metaapi.Client instance here for BOTH
+// channels, not one per channel: DownloadAttachment's implementation is a
+// plain, unauthenticated, size-capped GET with nothing Meta-specific about
+// it, and a Telegram attachment's URL (built by
+// telegramapi.Client.ResolveFileURL, called at Telegram webhook ingestion
+// time) already has its bot token embedded in the path, so it's just as
+// fetchable by a bare GET as Meta's pre-signed CDN links are. Reusing one
+// client here is accurate, not a hack — see ResolveFileURL's doc comment
+// for the other half of this.
 type MediaFetcher interface {
 	DownloadAttachment(ctx context.Context, url string) (data []byte, mimeType string, err error)
 }
@@ -118,6 +128,24 @@ type Retriever interface {
 // internal/integration/metaapi.Client.SendMessage.
 type Sender interface {
 	SendMessage(ctx context.Context, accessToken, recipientIGID, text string) error
+}
+
+// TelegramSender is Sender's Telegram-channel counterpart — satisfied by
+// internal/integration/telegramapi.Client.SendMessage. Kept as its own
+// interface rather than folded into Sender: the two APIs need different
+// per-send arguments (a decrypted bot token + business_connection_id vs.
+// an access token), so there's no shared signature to unify them under.
+type TelegramSender interface {
+	SendMessage(ctx context.Context, botToken, businessConnectionID, chatID, text string) error
+}
+
+// TelegramAccountLookup is the narrow port this usecase needs onto
+// TelegramAccount — satisfied by repository.TelegramAccountRepository,
+// which offers more methods than this interface asks for (same "narrow
+// port over a fatter repository" pattern as ProductLister/ClickIntegrationLookup
+// above).
+type TelegramAccountLookup interface {
+	FindByID(ctx context.Context, orgID, id uuid.UUID) (*entity.TelegramAccount, error)
 }
 
 // ProductLister is the narrow port onto the org's price catalog — satisfied
@@ -165,19 +193,21 @@ type authError interface {
 }
 
 type UseCase struct {
-	convRepo    repository.ConversationRepository
-	msgRepo     repository.MessageRepository
-	accountRepo repository.InstagramAccountRepository
-	aiRespRepo  repository.AIResponseRepository
-	retriever   Retriever
-	generator   Generator
-	sender      Sender
-	encryptor   *crypto.AESGCMEncryptor
-	products    ProductLister
-	click       ClickIntegrationLookup
-	leads       Leads
-	mediaGen    MediaGenerator
-	media       MediaFetcher
+	convRepo         repository.ConversationRepository
+	msgRepo          repository.MessageRepository
+	accountRepo      repository.InstagramAccountRepository
+	aiRespRepo       repository.AIResponseRepository
+	retriever        Retriever
+	generator        Generator
+	sender           Sender
+	encryptor        *crypto.AESGCMEncryptor
+	products         ProductLister
+	click            ClickIntegrationLookup
+	leads            Leads
+	mediaGen         MediaGenerator
+	media            MediaFetcher
+	telegramAccounts TelegramAccountLookup
+	telegramSender   TelegramSender
 }
 
 func New(
@@ -194,21 +224,25 @@ func New(
 	leads Leads,
 	mediaGen MediaGenerator,
 	media MediaFetcher,
+	telegramAccounts TelegramAccountLookup,
+	telegramSender TelegramSender,
 ) *UseCase {
 	return &UseCase{
-		convRepo:    convRepo,
-		msgRepo:     msgRepo,
-		accountRepo: accountRepo,
-		aiRespRepo:  aiRespRepo,
-		retriever:   retriever,
-		generator:   generator,
-		sender:      sender,
-		encryptor:   encryptor,
-		products:    products,
-		click:       click,
-		leads:       leads,
-		mediaGen:    mediaGen,
-		media:       media,
+		convRepo:         convRepo,
+		msgRepo:          msgRepo,
+		accountRepo:      accountRepo,
+		aiRespRepo:       aiRespRepo,
+		retriever:        retriever,
+		generator:        generator,
+		sender:           sender,
+		encryptor:        encryptor,
+		products:         products,
+		click:            click,
+		leads:            leads,
+		mediaGen:         mediaGen,
+		media:            media,
+		telegramAccounts: telegramAccounts,
+		telegramSender:   telegramSender,
 	}
 }
 
@@ -340,18 +374,30 @@ func (uc *UseCase) HandleInboundMessage(ctx context.Context, ev InboundEvent) er
 		return uc.handoff(ctx, conv)
 	}
 
-	account, err := uc.accountRepo.FindByID(ctx, ev.OrganizationID, ev.InstagramAccountID)
-	if err != nil {
-		return err
-	}
-	accessToken, err := uc.encryptor.Decrypt(account.AccessTokenEncrypted)
-	if err != nil {
-		return apperror.Internal("decrypt instagram access token", err)
-	}
+	// Which account to send from — and how — is resolved from conv.Channel,
+	// not from ev.InstagramAccountID: ev is only ever the Instagram-side
+	// event shape (see InboundEvent's doc comment), so a Telegram-channel
+	// conversation instead carries its own TelegramAccountID, set at
+	// ingestion by telegram.WebhookUseCase.ingestMessage.
+	switch conv.Channel {
+	case entity.ConversationChannelTelegram:
+		if err := uc.sendTelegramReply(ctx, ev.OrganizationID, conv, replyText); err != nil {
+			return err
+		}
+	default:
+		account, err := uc.accountRepo.FindByID(ctx, ev.OrganizationID, ev.InstagramAccountID)
+		if err != nil {
+			return err
+		}
+		accessToken, err := uc.encryptor.Decrypt(account.AccessTokenEncrypted)
+		if err != nil {
+			return apperror.Internal("decrypt instagram access token", err)
+		}
 
-	if err := uc.sender.SendMessage(ctx, accessToken, conv.CustomerIGID, replyText); err != nil {
-		uc.handleSendFailure(ctx, account, err)
-		return apperror.Internal("send instagram reply", err)
+		if err := uc.sender.SendMessage(ctx, accessToken, conv.CustomerIGID, replyText); err != nil {
+			uc.handleSendFailure(ctx, account, err)
+			return apperror.Internal("send instagram reply", err)
+		}
 	}
 
 	outbound := &entity.Message{
@@ -436,6 +482,86 @@ func (uc *UseCase) handleSendFailure(ctx context.Context, account *entity.Instag
 
 	account.Status = newStatus
 	_ = uc.accountRepo.Update(ctx, account)
+}
+
+// telegramAuthError is Telegram's counterpart to authError above —
+// satisfied by telegramapi.APIError. A separate, smaller interface (just
+// IsAuthError, no IsExpired) because bot tokens don't have Instagram's
+// ~60-day-lifetime concept — there's nothing to distinguish "expired" from
+// "revoked" the way Meta's subcode 463 does; every Telegram auth failure is
+// the same "the token stopped working, reconnect" case.
+type telegramAuthError interface {
+	IsAuthError() bool
+}
+
+// sendTelegramReply is HandleInboundMessage's Telegram branch — resolves
+// the sending TelegramAccount from conv.TelegramAccountID (set at
+// ingestion, never nil for a Channel == ConversationChannelTelegram row —
+// enforced by chk_conversations_channel_account, migration 000014),
+// decrypts its bot token, and sends via the Business Bot API. Mirrors the
+// Instagram branch's structure closely on purpose.
+func (uc *UseCase) sendTelegramReply(ctx context.Context, orgID uuid.UUID, conv *entity.Conversation, replyText string) error {
+	if conv.TelegramAccountID == nil {
+		return apperror.Internal("send telegram reply", errors.New("conversation has channel=telegram but no telegram_account_id"))
+	}
+	account, err := uc.telegramAccounts.FindByID(ctx, orgID, *conv.TelegramAccountID)
+	if err != nil {
+		return err
+	}
+	if account.BusinessConnectionID == nil {
+		// Bot token connected, but the org hasn't finished pairing it
+		// inside their own Telegram app yet (see
+		// entity.TelegramAccount.BusinessConnectionID's doc comment) —
+		// there is genuinely nothing to send to. This shouldn't be
+		// reachable in practice (no business_connection means no
+		// business_message could have arrived to trigger a reply in the
+		// first place), but fails loudly rather than silently no-opping if
+		// it ever is.
+		return apperror.Internal("send telegram reply", errors.New("telegram account has no business_connection_id"))
+	}
+
+	botToken, err := uc.encryptor.Decrypt(account.BotTokenEncrypted)
+	if err != nil {
+		return apperror.Internal("decrypt telegram bot token", err)
+	}
+
+	if err := uc.telegramSender.SendMessage(ctx, botToken, *account.BusinessConnectionID, conv.CustomerIGID, replyText); err != nil {
+		uc.handleTelegramSendFailure(ctx, account, err)
+		return apperror.Internal("send telegram reply", err)
+	}
+	return nil
+}
+
+// handleTelegramSendFailure mirrors handleSendFailure — see that method's
+// doc comment for the full reasoning (best-effort, must not mask the
+// original send error). uc.telegramAccounts is a TelegramAccountLookup
+// (read-only), so flipping status requires the concrete
+// repository.TelegramAccountRepository's Update — deliberately NOT added
+// to TelegramAccountLookup (that interface stays read-only on purpose,
+// same as every other narrow port in this file), so this method is a
+// no-op if the wired implementation doesn't also satisfy an update port.
+// In practice internal/di always wires the same concrete
+// *postgres.TelegramAccountRepository for both TelegramAccountLookup here
+// and telegram.ConnectUseCase's full repository.TelegramAccountRepository,
+// so this type-asserts to reach Update rather than widening
+// TelegramAccountLookup just for this one write.
+func (uc *UseCase) handleTelegramSendFailure(ctx context.Context, account *entity.TelegramAccount, sendErr error) {
+	var ae telegramAuthError
+	if !errors.As(sendErr, &ae) || !ae.IsAuthError() {
+		return
+	}
+	if account.Status == entity.TelegramAccountStatusError {
+		return
+	}
+
+	updater, ok := uc.telegramAccounts.(interface {
+		Update(ctx context.Context, account *entity.TelegramAccount) error
+	})
+	if !ok {
+		return
+	}
+	account.Status = entity.TelegramAccountStatusError
+	_ = updater.Update(ctx, account)
 }
 
 func (uc *UseCase) handoff(ctx context.Context, conv *entity.Conversation) error {

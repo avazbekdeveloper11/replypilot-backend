@@ -25,11 +25,27 @@ type Sender interface {
 	SendMessage(ctx context.Context, accessToken, recipientIGID, text string) error
 }
 
+// TelegramSender mirrors internal/usecase/ai's — see that package's doc
+// comment for why this isn't a shared type.
+type TelegramSender interface {
+	SendMessage(ctx context.Context, botToken, businessConnectionID, chatID, text string) error
+}
+
+// TelegramAccountLookup mirrors internal/usecase/ai's.
+type TelegramAccountLookup interface {
+	FindByID(ctx context.Context, orgID, id uuid.UUID) (*entity.TelegramAccount, error)
+}
+
 // authError mirrors internal/usecase/ai's — see that package's doc comment
 // for why this isn't a shared type.
 type authError interface {
 	IsAuthError() bool
 	IsExpired() bool
+}
+
+// telegramAuthError mirrors internal/usecase/ai's.
+type telegramAuthError interface {
+	IsAuthError() bool
 }
 
 // maxSendMessageLen bounds SendMessage's Content — Instagram's Send API
@@ -38,11 +54,13 @@ type authError interface {
 const maxSendMessageLen = 1000
 
 type UseCase struct {
-	convRepo    repository.ConversationRepository
-	msgRepo     repository.MessageRepository
-	accountRepo repository.InstagramAccountRepository
-	sender      Sender
-	encryptor   *crypto.AESGCMEncryptor
+	convRepo         repository.ConversationRepository
+	msgRepo          repository.MessageRepository
+	accountRepo      repository.InstagramAccountRepository
+	sender           Sender
+	encryptor        *crypto.AESGCMEncryptor
+	telegramAccounts TelegramAccountLookup
+	telegramSender   TelegramSender
 }
 
 func New(
@@ -51,13 +69,17 @@ func New(
 	accountRepo repository.InstagramAccountRepository,
 	sender Sender,
 	encryptor *crypto.AESGCMEncryptor,
+	telegramAccounts TelegramAccountLookup,
+	telegramSender TelegramSender,
 ) *UseCase {
 	return &UseCase{
-		convRepo:    convRepo,
-		msgRepo:     msgRepo,
-		accountRepo: accountRepo,
-		sender:      sender,
-		encryptor:   encryptor,
+		convRepo:         convRepo,
+		msgRepo:          msgRepo,
+		accountRepo:      accountRepo,
+		sender:           sender,
+		encryptor:        encryptor,
+		telegramAccounts: telegramAccounts,
+		telegramSender:   telegramSender,
 	}
 }
 
@@ -132,18 +154,28 @@ func (uc *UseCase) SendMessage(ctx context.Context, orgID, id, userID uuid.UUID,
 		return nil, apperror.InvalidInput("only a conversation you've taken over can be replied to — take over first", nil)
 	}
 
-	account, err := uc.accountRepo.FindByID(ctx, orgID, conv.InstagramAccountID)
-	if err != nil {
-		return nil, err
-	}
-	accessToken, err := uc.encryptor.Decrypt(account.AccessTokenEncrypted)
-	if err != nil {
-		return nil, apperror.Internal("decrypt instagram access token", err)
-	}
+	// See internal/usecase/ai.HandleInboundMessage's identical channel
+	// switch for why this branches on conv.Channel instead of always
+	// assuming Instagram.
+	switch conv.Channel {
+	case entity.ConversationChannelTelegram:
+		if err := uc.sendTelegramMessage(ctx, orgID, conv, content); err != nil {
+			return nil, err
+		}
+	default:
+		account, err := uc.accountRepo.FindByID(ctx, orgID, conv.InstagramAccountID)
+		if err != nil {
+			return nil, err
+		}
+		accessToken, err := uc.encryptor.Decrypt(account.AccessTokenEncrypted)
+		if err != nil {
+			return nil, apperror.Internal("decrypt instagram access token", err)
+		}
 
-	if err := uc.sender.SendMessage(ctx, accessToken, conv.CustomerIGID, content); err != nil {
-		uc.handleSendFailure(ctx, account, err)
-		return nil, apperror.Internal("send instagram reply", err)
+		if err := uc.sender.SendMessage(ctx, accessToken, conv.CustomerIGID, content); err != nil {
+			uc.handleSendFailure(ctx, account, err)
+			return nil, apperror.Internal("send instagram reply", err)
+		}
 	}
 
 	outbound := &entity.Message{
@@ -205,6 +237,55 @@ func (uc *UseCase) handleSendFailure(ctx context.Context, account *entity.Instag
 
 	account.Status = newStatus
 	_ = uc.accountRepo.Update(ctx, account)
+}
+
+// sendTelegramMessage mirrors internal/usecase/ai.UseCase.sendTelegramReply
+// — see that method's doc comment for the full reasoning, not repeated
+// here.
+func (uc *UseCase) sendTelegramMessage(ctx context.Context, orgID uuid.UUID, conv *entity.Conversation, content string) error {
+	if conv.TelegramAccountID == nil {
+		return apperror.Internal("send telegram message", errors.New("conversation has channel=telegram but no telegram_account_id"))
+	}
+	account, err := uc.telegramAccounts.FindByID(ctx, orgID, *conv.TelegramAccountID)
+	if err != nil {
+		return err
+	}
+	if account.BusinessConnectionID == nil {
+		return apperror.Internal("send telegram message", errors.New("telegram account has no business_connection_id"))
+	}
+
+	botToken, err := uc.encryptor.Decrypt(account.BotTokenEncrypted)
+	if err != nil {
+		return apperror.Internal("decrypt telegram bot token", err)
+	}
+
+	if err := uc.telegramSender.SendMessage(ctx, botToken, *account.BusinessConnectionID, conv.CustomerIGID, content); err != nil {
+		uc.handleTelegramSendFailure(ctx, account, err)
+		return apperror.Internal("send telegram message", err)
+	}
+	return nil
+}
+
+// handleTelegramSendFailure mirrors internal/usecase/ai.UseCase's method of
+// the same name — see its doc comment for the full reasoning, including why
+// this type-asserts uc.telegramAccounts to reach Update.
+func (uc *UseCase) handleTelegramSendFailure(ctx context.Context, account *entity.TelegramAccount, sendErr error) {
+	var ae telegramAuthError
+	if !errors.As(sendErr, &ae) || !ae.IsAuthError() {
+		return
+	}
+	if account.Status == entity.TelegramAccountStatusError {
+		return
+	}
+
+	updater, ok := uc.telegramAccounts.(interface {
+		Update(ctx context.Context, account *entity.TelegramAccount) error
+	})
+	if !ok {
+		return
+	}
+	account.Status = entity.TelegramAccountStatusError
+	_ = updater.Update(ctx, account)
 }
 
 // Resolve is the other half of the handoff state machine TakeOver starts —

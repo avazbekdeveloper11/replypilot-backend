@@ -24,6 +24,7 @@ import (
 	"github.com/replypilot/backend/internal/config"
 	"github.com/replypilot/backend/internal/integration/geminiapi"
 	"github.com/replypilot/backend/internal/integration/metaapi"
+	"github.com/replypilot/backend/internal/integration/telegramapi"
 	"github.com/replypilot/backend/internal/platform/database"
 	"github.com/replypilot/backend/internal/platform/geminikey"
 	platformlogger "github.com/replypilot/backend/internal/platform/logger"
@@ -96,10 +97,12 @@ func run() error {
 	productRepo := postgresrepo.NewProductRepository(db)
 	clickIntegrationRepo := postgresrepo.NewClickIntegrationRepository(db)
 	leadRepo := postgresrepo.NewLeadRepository(db)
+	telegramAccountRepo := postgresrepo.NewTelegramAccountRepository(db)
 
 	// --- integrations ---
 	geminiClient := geminiapi.NewClient(cfg.Gemini.APIKey)
 	metaClient := metaapi.NewClient(cfg.Meta.AppID, cfg.Meta.AppSecret, cfg.Meta.RedirectURL, cfg.Meta.GraphAPIBaseURL)
+	telegramClient := telegramapi.NewClient("")
 
 	// --- usecases ---
 	// knowledgeUseCase is only used here for its Search method (RAG
@@ -114,7 +117,11 @@ func run() error {
 	// concrete client, satisfying two narrow interfaces, not two separate
 	// instances. See aiuc.MediaGenerator and aiuc.MediaFetcher's doc
 	// comments.
-	aiUseCase := aiuc.New(convRepo, msgRepo, accountRepo, aiRespRepo, knowledgeUseCase, geminiClient, metaClient, encryptor, productRepo, clickIntegrationRepo, leadRepo, geminiClient, metaClient)
+	// telegramAccountRepo and telegramClient are passed as both
+	// aiuc.TelegramAccountLookup and aiuc.TelegramSender — the same
+	// pattern as geminiClient/metaClient above, one concrete instance
+	// satisfying two narrow interfaces.
+	aiUseCase := aiuc.New(convRepo, msgRepo, accountRepo, aiRespRepo, knowledgeUseCase, geminiClient, metaClient, encryptor, productRepo, clickIntegrationRepo, leadRepo, geminiClient, metaClient, telegramAccountRepo, telegramClient)
 	platformSettingsUseCase := platformsettingsuc.New(platformSettingsRepo, encryptor)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

@@ -28,6 +28,7 @@ import (
 	"github.com/replypilot/backend/internal/integration/geminiapi"
 	"github.com/replypilot/backend/internal/integration/metaapi"
 	"github.com/replypilot/backend/internal/integration/resendapi"
+	"github.com/replypilot/backend/internal/integration/telegramapi"
 	"github.com/replypilot/backend/internal/integration/stripeapi"
 	"github.com/replypilot/backend/internal/platform/cache"
 	"github.com/replypilot/backend/internal/platform/database"
@@ -51,6 +52,7 @@ import (
 	platformsettingsuc "github.com/replypilot/backend/internal/usecase/platformsettings"
 	productuc "github.com/replypilot/backend/internal/usecase/product"
 	teamuc "github.com/replypilot/backend/internal/usecase/team"
+	telegramuc "github.com/replypilot/backend/internal/usecase/telegram"
 	useruc "github.com/replypilot/backend/internal/usecase/user"
 	"github.com/replypilot/backend/pkg/crypto"
 	"github.com/replypilot/backend/pkg/jwtutil"
@@ -130,6 +132,7 @@ func New(cfg *config.Config) (*Container, error) {
 	productRepo := postgresrepo.NewProductRepository(db)
 	clickIntegrationRepo := postgresrepo.NewClickIntegrationRepository(db)
 	leadRepo := postgresrepo.NewLeadRepository(db)
+	telegramAccountRepo := postgresrepo.NewTelegramAccountRepository(db)
 	refreshTokenStore := redisrepo.NewRefreshTokenStore(redisClient)
 	oauthStateStore := redisrepo.NewOAuthStateStore(redisClient)
 	otpStore := redisrepo.NewOTPStore(redisClient)
@@ -138,6 +141,7 @@ func New(cfg *config.Config) (*Container, error) {
 	graphClient := metaapi.NewClient(cfg.Meta.AppID, cfg.Meta.AppSecret, cfg.Meta.RedirectURL, cfg.Meta.GraphAPIBaseURL)
 	geminiClient := geminiapi.NewClient(cfg.Gemini.APIKey)
 	stripeClient := stripeapi.NewClient(cfg.Stripe.SecretKey)
+	telegramClient := telegramapi.NewClient("")
 
 	// EmailSender: real delivery via Resend once RESEND_API_KEY is set,
 	// LogNotifier (logs instead of sending) otherwise — see EmailConfig's
@@ -156,7 +160,9 @@ func New(cfg *config.Config) (*Container, error) {
 	orgUseCase := organizationuc.New(orgRepo)
 	oauthUseCase := instagramuc.NewOAuthUseCase(instagramAccountRepo, graphClient, oauthStateStore, encryptor, cfg.Meta.AppID, cfg.Meta.RedirectURL)
 	webhookUseCase := instagramuc.NewWebhookUseCase(webhookLogRepo, instagramAccountRepo, conversationRepo, messageRepo, publisher, graphClient, encryptor, cfg.Meta.AppSecret, cfg.Meta.WebhookVerifyToken, logger)
-	conversationUseCase := conversationuc.New(conversationRepo, messageRepo, instagramAccountRepo, graphClient, encryptor)
+	telegramConnectUseCase := telegramuc.NewConnectUseCase(telegramAccountRepo, telegramClient, encryptor, cfg.Telegram.WebhookBaseURL, cfg.Telegram.WebhookSecret)
+	telegramWebhookUseCase := telegramuc.NewWebhookUseCase(webhookLogRepo, telegramAccountRepo, conversationRepo, messageRepo, publisher, telegramClient, encryptor, cfg.Telegram.WebhookSecret, logger)
+	conversationUseCase := conversationuc.New(conversationRepo, messageRepo, instagramAccountRepo, graphClient, encryptor, telegramAccountRepo, telegramClient)
 	dashboardUseCase := dashboarduc.New(dashboardRepo, conversationRepo, instagramAccountRepo)
 	teamUseCase := teamuc.New(teamMemberRepo, userRepo, roleRepo)
 	knowledgeUseCase := knowledgebaseuc.New(knowledgeDocRepo, knowledgeChunkRepo, geminiClient)
@@ -174,7 +180,9 @@ func New(cfg *config.Config) (*Container, error) {
 		Auth:         v1.NewAuthHandler(authUseCase),
 		Organization: v1.NewOrganizationHandler(orgUseCase),
 		Instagram:    v1.NewInstagramHandler(oauthUseCase),
+		Telegram:     v1.NewTelegramHandler(telegramConnectUseCase),
 		Webhook:      v1.NewWebhookHandler(webhookUseCase),
+		TelegramWebhook: v1.NewTelegramWebhookHandler(telegramWebhookUseCase),
 		Conversation: v1.NewConversationHandler(conversationUseCase),
 		Dashboard:    v1.NewDashboardHandler(dashboardUseCase),
 		Team:         v1.NewTeamHandler(teamUseCase),

@@ -240,6 +240,7 @@ func (uc *WebhookUseCase) ingestMessage(ctx context.Context, igBusinessAccountID
 		}
 		conv = &entity.Conversation{
 			OrganizationID:     account.OrganizationID,
+			Channel:            entity.ConversationChannelInstagram,
 			InstagramAccountID: account.ID,
 			CustomerIGID:       m.Sender.ID,
 			Status:             entity.ConversationStatusAIActive,

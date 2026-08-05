@@ -318,9 +318,31 @@ type InstagramAccountResponse struct {
 	Status   string  `json:"status"`
 }
 
+type TelegramConnectRequest struct {
+	// BotToken is the string @BotFather gives back after /newbot — this
+	// codebase never generates one itself.
+	BotToken string `json:"bot_token" binding:"required"`
+}
+
+type TelegramAccountResponse struct {
+	ID       string  `json:"id"`
+	Username *string `json:"bot_username,omitempty"`
+	Status   string  `json:"status"`
+	// Paired reports whether the org has finished connecting this bot
+	// inside their own Telegram app yet (entity.TelegramAccount.BusinessConnectionID
+	// != nil) — the frontend settings card uses this to show "waiting for
+	// you to finish pairing in Telegram" vs. "connected and receiving
+	// messages".
+	Paired bool `json:"paired"`
+}
+
 type ConversationResponse struct {
 	ID                 string  `json:"id"`
 	Status             string  `json:"status"`
+	// Channel is "instagram" or "telegram" — see entity.ConversationChannel.
+	// Added when Telegram support landed; not yet surfaced as a badge in
+	// the frontend inbox, but available for that follow-up.
+	Channel            string  `json:"channel"`
 	CustomerUsername   *string `json:"customer_username,omitempty"`
 	LastMessagePreview *string `json:"last_message_preview,omitempty"`
 	LastMessageAt      *string `json:"last_message_at,omitempty"`

@@ -287,6 +287,7 @@ func toConversationResponse(conv *entity.Conversation) ConversationResponse {
 	resp := ConversationResponse{
 		ID:                 conv.ID.String(),
 		Status:             string(conv.Status),
+		Channel:            string(conv.Channel),
 		CustomerUsername:   conv.CustomerUsername,
 		LastMessagePreview: conv.LastMessagePreview,
 		UnreadCount:        conv.UnreadCount,
