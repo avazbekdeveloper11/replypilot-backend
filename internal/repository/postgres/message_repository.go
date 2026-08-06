@@ -102,6 +102,40 @@ func (r *MessageRepository) List(ctx context.Context, params repository.MessageL
 	return messages, nil
 }
 
+// ListRecentInboundByOrganization backs internal/usecase/insights' org-wide
+// sentiment/theme synthesis — see the interface doc comment. Queries across
+// the whole (partitioned-by-created_at) messages table rather than one
+// conversation, newest first, capped at limit — Postgres partition pruning
+// keeps this cheap even as the table grows, since ORDER BY created_at DESC
+// LIMIT N only has to touch the most recent partitions.
+func (r *MessageRepository) ListRecentInboundByOrganization(ctx context.Context, orgID uuid.UUID, limit int) ([]*entity.Message, error) {
+	if limit <= 0 {
+		limit = defaultMessagePageSize
+	}
+
+	var models []MessageModel
+	err := withTenant(ctx, r.db, orgID, func(tx *gorm.DB) error {
+		return tx.
+			Where("organization_id = ? AND direction = ? AND sender_type = ?", orgID, string(entity.MessageDirectionInbound), string(entity.MessageSenderCustomer)).
+			Order("created_at DESC").
+			Limit(limit).
+			Find(&models).Error
+	})
+	if err != nil {
+		return nil, apperror.Internal("list recent inbound messages", err)
+	}
+
+	messages := make([]*entity.Message, 0, len(models))
+	for i := range models {
+		m, err := modelToMessage(&models[i])
+		if err != nil {
+			return nil, apperror.Internal("unmarshal message metadata", err)
+		}
+		messages = append(messages, m)
+	}
+	return messages, nil
+}
+
 func messageToModel(msg *entity.Message) (*MessageModel, error) {
 	var metadataJSON []byte
 	if msg.Metadata != nil {

@@ -207,6 +207,19 @@ type UpdateLeadStatusRequest struct {
 	Status string `json:"status" binding:"required,oneof=new contacted done"`
 }
 
+// AIInsightsResponse mirrors entity.AIInsights — see that type's doc
+// comment. SalesCount/SalesAmountCents/LeadCount/ConversationCount are
+// real numbers from the last time this was generated (GeneratedAt), not
+// live — the frontend shows GeneratedAt alongside them so that's obvious.
+type AIInsightsResponse struct {
+	Summary           string `json:"summary"`
+	SalesCount        int    `json:"sales_count"`
+	SalesAmountCents  int64  `json:"sales_amount_cents"`
+	LeadCount         int    `json:"lead_count"`
+	ConversationCount int    `json:"conversation_count"`
+	GeneratedAt       string `json:"generated_at"`
+}
+
 type ConnectClickRequest struct {
 	MerchantID     string  `json:"merchant_id" binding:"required"`
 	ServiceID      string  `json:"service_id" binding:"required"`
@@ -353,6 +366,11 @@ type ConversationResponse struct {
 	LastMessagePreview *string `json:"last_message_preview,omitempty"`
 	LastMessageAt      *string `json:"last_message_at,omitempty"`
 	UnreadCount        int     `json:"unread_count"`
+	// AISummary/AISummaryGeneratedAt are nil until an admin generates one
+	// (POST .../summary) — see entity.Conversation.AISummary's doc comment
+	// on why this isn't kept live automatically.
+	AISummary            *string `json:"ai_summary,omitempty"`
+	AISummaryGeneratedAt *string `json:"ai_summary_generated_at,omitempty"`
 }
 
 type MessageResponse struct {

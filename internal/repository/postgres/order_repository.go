@@ -9,6 +9,7 @@ import (
 
 	"github.com/replypilot/backend/internal/domain/apperror"
 	"github.com/replypilot/backend/internal/domain/entity"
+	"github.com/replypilot/backend/internal/domain/repository"
 )
 
 type OrderRepository struct {
@@ -89,6 +90,29 @@ func (r *OrderRepository) Update(ctx context.Context, order *entity.Order) error
 		return apperror.NotFound("order not found")
 	}
 	return nil
+}
+
+// Stats is a real SQL aggregate (COUNT/COALESCE(SUM,0)) over status='paid'
+// — see the interface doc comment on why this, not Gemini, is the source
+// of truth for sales figures.
+func (r *OrderRepository) Stats(ctx context.Context, orgID uuid.UUID) (*repository.OrderStats, error) {
+	var row struct {
+		PaidCount       int64
+		PaidAmountCents int64
+	}
+	err := withTenant(ctx, r.db, orgID, func(tx *gorm.DB) error {
+		return tx.Model(&OrderModel{}).
+			Select("count(*) as paid_count, coalesce(sum(amount_cents), 0) as paid_amount_cents").
+			Where("organization_id = ? AND status = ?", orgID, string(entity.OrderStatusPaid)).
+			Scan(&row).Error
+	})
+	if err != nil {
+		return nil, apperror.Internal("order stats", err)
+	}
+	return &repository.OrderStats{
+		PaidCount:       int(row.PaidCount),
+		PaidAmountCents: row.PaidAmountCents,
+	}, nil
 }
 
 func orderToModel(o *entity.Order) *OrderModel {

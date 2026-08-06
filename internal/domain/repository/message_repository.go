@@ -25,4 +25,12 @@ type MessageRepository interface {
 	// ConversationRepository.FindByAccountAndCustomer above.
 	FindByIGMessageID(ctx context.Context, orgID uuid.UUID, igMessageID string) (*entity.Message, error)
 	List(ctx context.Context, params MessageListParams) ([]*entity.Message, error)
+	// ListRecentInboundByOrganization feeds internal/usecase/insights'
+	// org-wide sentiment/theme synthesis — real customer text (direction
+	// inbound, sender_type customer) only, newest first, capped at limit.
+	// Not scoped to one conversation (unlike List), and deliberately not
+	// filtered any further (e.g. by having text content) here — that
+	// filtering happens in the usecase, which also decides how much of
+	// each message's text actually reaches the Gemini prompt.
+	ListRecentInboundByOrganization(ctx context.Context, orgID uuid.UUID, limit int) ([]*entity.Message, error)
 }

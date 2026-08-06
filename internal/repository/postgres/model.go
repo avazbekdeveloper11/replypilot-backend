@@ -121,21 +121,23 @@ func (TelegramAccountModel) TableName() string { return "telegram_accounts" }
 // to/from entity.Conversation's non-pointer InstagramAccountID, which stays
 // uuid.Nil (never actually read) on a Telegram-channel row.
 type ConversationModel struct {
-	ID                  uuid.UUID      `gorm:"column:id;type:uuid;primaryKey"`
-	OrganizationID      uuid.UUID      `gorm:"column:organization_id;type:uuid"`
-	InstagramAccountID  *uuid.UUID     `gorm:"column:instagram_account_id;type:uuid"`
-	TelegramAccountID   *uuid.UUID     `gorm:"column:telegram_account_id;type:uuid"`
-	Channel             string         `gorm:"column:channel"`
-	CustomerIGID        string         `gorm:"column:customer_ig_id"`
-	CustomerUsername    *string        `gorm:"column:customer_username"`
-	Status              string         `gorm:"column:status"`
-	AssignedUserID      *uuid.UUID     `gorm:"column:assigned_user_id;type:uuid"`
-	LastMessageAt       *time.Time     `gorm:"column:last_message_at"`
-	LastMessagePreview  *string        `gorm:"column:last_message_preview"`
-	UnreadCount         int            `gorm:"column:unread_count"`
-	CreatedAt           time.Time      `gorm:"column:created_at"`
-	UpdatedAt           time.Time      `gorm:"column:updated_at"`
-	DeletedAt           gorm.DeletedAt `gorm:"column:deleted_at;index"`
+	ID                   uuid.UUID      `gorm:"column:id;type:uuid;primaryKey"`
+	OrganizationID       uuid.UUID      `gorm:"column:organization_id;type:uuid"`
+	InstagramAccountID   *uuid.UUID     `gorm:"column:instagram_account_id;type:uuid"`
+	TelegramAccountID    *uuid.UUID     `gorm:"column:telegram_account_id;type:uuid"`
+	Channel              string         `gorm:"column:channel"`
+	CustomerIGID         string         `gorm:"column:customer_ig_id"`
+	CustomerUsername     *string        `gorm:"column:customer_username"`
+	Status               string         `gorm:"column:status"`
+	AssignedUserID       *uuid.UUID     `gorm:"column:assigned_user_id;type:uuid"`
+	LastMessageAt        *time.Time     `gorm:"column:last_message_at"`
+	LastMessagePreview   *string        `gorm:"column:last_message_preview"`
+	UnreadCount          int            `gorm:"column:unread_count"`
+	AISummary            *string        `gorm:"column:ai_summary"`
+	AISummaryGeneratedAt *time.Time     `gorm:"column:ai_summary_generated_at"`
+	CreatedAt            time.Time      `gorm:"column:created_at"`
+	UpdatedAt            time.Time      `gorm:"column:updated_at"`
+	DeletedAt            gorm.DeletedAt `gorm:"column:deleted_at;index"`
 }
 
 func (ConversationModel) TableName() string { return "conversations" }
@@ -335,6 +337,20 @@ type OrderModel struct {
 }
 
 func (OrderModel) TableName() string { return "orders" }
+
+// AIInsightsCacheModel maps to ai_insights_cache — see entity.AIInsights'
+// doc comment for what this row represents.
+type AIInsightsCacheModel struct {
+	OrganizationID    uuid.UUID `gorm:"column:organization_id;type:uuid;primaryKey"`
+	Summary           string    `gorm:"column:summary"`
+	SalesCount        int       `gorm:"column:sales_count"`
+	SalesAmountCents  int64     `gorm:"column:sales_amount_cents"`
+	LeadCount         int       `gorm:"column:lead_count"`
+	ConversationCount int       `gorm:"column:conversation_count"`
+	GeneratedAt       time.Time `gorm:"column:generated_at"`
+}
+
+func (AIInsightsCacheModel) TableName() string { return "ai_insights_cache" }
 
 // LeadModel maps to dm_leads, not leads: migration 000001 already owns an
 // unrelated "leads" table (dead CRM-style schema, no Go code behind it) —

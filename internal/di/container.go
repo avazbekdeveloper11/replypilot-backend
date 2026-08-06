@@ -45,6 +45,7 @@ import (
 	billinguc "github.com/replypilot/backend/internal/usecase/billing"
 	clickuc "github.com/replypilot/backend/internal/usecase/click"
 	dashboarduc "github.com/replypilot/backend/internal/usecase/dashboard"
+	insightsuc "github.com/replypilot/backend/internal/usecase/insights"
 	instagramuc "github.com/replypilot/backend/internal/usecase/instagram"
 	knowledgebaseuc "github.com/replypilot/backend/internal/usecase/knowledgebase"
 	leaduc "github.com/replypilot/backend/internal/usecase/lead"
@@ -135,6 +136,7 @@ func New(cfg *config.Config) (*Container, error) {
 	leadRepo := postgresrepo.NewLeadRepository(db)
 	telegramAccountRepo := postgresrepo.NewTelegramAccountRepository(db)
 	orderRepo := postgresrepo.NewOrderRepository(db)
+	aiInsightsRepo := postgresrepo.NewAIInsightsRepository(db)
 	refreshTokenStore := redisrepo.NewRefreshTokenStore(redisClient)
 	oauthStateStore := redisrepo.NewOAuthStateStore(redisClient)
 	otpStore := redisrepo.NewOTPStore(redisClient)
@@ -164,7 +166,11 @@ func New(cfg *config.Config) (*Container, error) {
 	webhookUseCase := instagramuc.NewWebhookUseCase(webhookLogRepo, instagramAccountRepo, conversationRepo, messageRepo, publisher, graphClient, encryptor, cfg.Meta.AppSecret, cfg.Meta.WebhookVerifyToken, logger)
 	telegramConnectUseCase := telegramuc.NewConnectUseCase(telegramAccountRepo, telegramClient, encryptor, cfg.Telegram.WebhookBaseURL, cfg.Telegram.WebhookSecret)
 	telegramWebhookUseCase := telegramuc.NewWebhookUseCase(webhookLogRepo, telegramAccountRepo, conversationRepo, messageRepo, publisher, telegramClient, encryptor, cfg.Telegram.WebhookSecret, logger)
-	conversationUseCase := conversationuc.New(conversationRepo, messageRepo, instagramAccountRepo, graphClient, encryptor, telegramAccountRepo, telegramClient)
+	// geminiClient is passed once more here as conversationuc.Generator —
+	// only Summarize (on-demand conversation summaries) uses it, same "one
+	// concrete instance, another narrow port" pattern as elsewhere in this
+	// file.
+	conversationUseCase := conversationuc.New(conversationRepo, messageRepo, instagramAccountRepo, graphClient, encryptor, telegramAccountRepo, telegramClient, geminiClient)
 	dashboardUseCase := dashboarduc.New(dashboardRepo, conversationRepo, instagramAccountRepo)
 	teamUseCase := teamuc.New(teamMemberRepo, userRepo, roleRepo)
 	knowledgeUseCase := knowledgebaseuc.New(knowledgeDocRepo, knowledgeChunkRepo, geminiClient)
@@ -181,6 +187,10 @@ func New(cfg *config.Config) (*Container, error) {
 	// same "one concrete instance, several narrow ports" pattern as
 	// conversationUseCase and aiUseCase above, not new instances.
 	paymentWebhookUseCase := paymentuc.New(clickIntegrationRepo, orderRepo, conversationRepo, productRepo, messageRepo, instagramAccountRepo, graphClient, telegramAccountRepo, telegramClient, encryptor, logger)
+	// geminiClient passed once more here as insightsuc.Generator — same
+	// "one concrete instance, another narrow port" pattern as
+	// conversationUseCase above.
+	insightsUseCase := insightsuc.New(aiInsightsRepo, orderRepo, leadRepo, dashboardRepo, messageRepo, geminiClient)
 
 	// --- handlers ---
 	handlers := httpserver.Handlers{
@@ -202,6 +212,7 @@ func New(cfg *config.Config) (*Container, error) {
 		Product:      v1.NewProductHandler(productUseCase),
 		Click:        v1.NewClickHandler(clickUseCase),
 		Lead:         v1.NewLeadHandler(leadUseCase),
+		Insights:     v1.NewInsightsHandler(insightsUseCase),
 	}
 
 	// --- middlewares ---

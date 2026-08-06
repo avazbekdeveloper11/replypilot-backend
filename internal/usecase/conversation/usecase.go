@@ -3,6 +3,8 @@ package conversation
 import (
 	"context"
 	"errors"
+	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/replypilot/backend/internal/domain/apperror"
 	"github.com/replypilot/backend/internal/domain/entity"
 	"github.com/replypilot/backend/internal/domain/repository"
+	"github.com/replypilot/backend/internal/integration/geminiapi"
 	"github.com/replypilot/backend/pkg/crypto"
 )
 
@@ -48,6 +51,15 @@ type telegramAuthError interface {
 	IsAuthError() bool
 }
 
+// Generator mirrors internal/usecase/ai's Generator port — used here only
+// by Summarize, for on-demand conversation summarization, not for
+// generating a reply to send. Declared separately per this package's
+// established "usecases don't depend on each other" convention (see
+// Sender's doc comment above for the fuller reasoning).
+type Generator interface {
+	Generate(ctx context.Context, systemPrompt, userMessage string) (string, geminiapi.GenerateUsage, error)
+}
+
 // maxSendMessageLen bounds SendMessage's Content — Instagram's Send API
 // itself rejects overlong messages; failing fast with a clear error here
 // beats a confusing 400 surfaced from Meta's API partway through.
@@ -61,6 +73,7 @@ type UseCase struct {
 	encryptor        *crypto.AESGCMEncryptor
 	telegramAccounts TelegramAccountLookup
 	telegramSender   TelegramSender
+	generator        Generator
 }
 
 func New(
@@ -71,6 +84,7 @@ func New(
 	encryptor *crypto.AESGCMEncryptor,
 	telegramAccounts TelegramAccountLookup,
 	telegramSender TelegramSender,
+	generator Generator,
 ) *UseCase {
 	return &UseCase{
 		convRepo:         convRepo,
@@ -80,6 +94,7 @@ func New(
 		encryptor:        encryptor,
 		telegramAccounts: telegramAccounts,
 		telegramSender:   telegramSender,
+		generator:        generator,
 	}
 }
 
@@ -335,5 +350,129 @@ func (uc *UseCase) ListMessages(ctx context.Context, orgID, conversationID uuid.
 		ConversationID: conversationID,
 		CursorBefore:   cursorBefore,
 		Limit:          limit,
+	})
+}
+
+// summaryMessageLimit bounds how much history Summarize reads — same
+// "MVP-sized shop" capping convention as internal/usecase/ai's
+// historyLimit/retrievalLimit, just a much larger window since a summary
+// needs to see far more of a conversation than a single reply's rolling
+// context does. 200 turns is generous for the kind of DM sales
+// conversation this product handles; a conversation longer than that gets
+// summarized from its most recent 200 messages, not its very first ones —
+// a reasonable trade-off for an on-demand admin tool, not something a
+// customer-facing feature depends on.
+const summaryMessageLimit = 200
+
+// summarySystemPrompt drives Summarize — deliberately separate from
+// internal/usecase/ai's systemPromptTemplate (that one generates a reply
+// TO the customer; this one generates a note ABOUT the conversation, FOR
+// the admin, and is never sent to anyone outside the dashboard).
+const summarySystemPrompt = `Siz ReplyPilot dasturidagi ichki yordamchisiz. Quyida bitta mijoz bilan bo'lgan yozishmalar transkripti berilgan (mijoz, AI va inson agent xabarlari). Vazifangiz — ushbu suhbatni administratorga tushunarli, qisqa xulosa qilib berish.
+
+Quyidagilarni yoriting:
+- Mijoz nima haqida yozgan, nimaga qiziqqan yoki nimani so'ragan
+- Suhbat qanday yakunlangan yoki hozirda qanday holatda (masalan: sotib oldi, savol berdi-javob olmadi, shikoyat qildi, hali davom etyapti)
+- Agar tegishli bo'lsa, keyingi qadam bo'yicha tavsiya
+
+Faqat transkriptdagi ma'lumotga tayaning, hech narsa o'ylab topmang. Javobni oddiy matn shaklida yozing — markdown formatlash (**, *, # va h.k.) ishlatmang. 3-6 gapdan iborat qisqa xulosa yetarli.`
+
+// Summarize generates (or regenerates — always overwrites, see
+// entity.Conversation.AISummary's doc comment) an AI summary of what this
+// customer and the business actually discussed, for the admin's benefit —
+// the per-conversation counterpart to internal/usecase/insights' org-wide
+// summary. On-demand only: nothing calls this automatically, so it never
+// adds Gemini cost to the reply pipeline itself.
+func (uc *UseCase) Summarize(ctx context.Context, orgID, id uuid.UUID) (*entity.Conversation, error) {
+	conv, err := uc.convRepo.FindByID(ctx, orgID, id)
+	if err != nil {
+		return nil, err
+	}
+
+	history, err := uc.msgRepo.List(ctx, repository.MessageListParams{
+		OrganizationID: orgID,
+		ConversationID: id,
+		Limit:          summaryMessageLimit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(history) == 0 {
+		return nil, apperror.InvalidInput("conversation has no messages to summarize yet", nil)
+	}
+
+	transcript := buildSummaryTranscript(history)
+	summary, _, err := uc.generator.Generate(ctx, summarySystemPrompt, transcript)
+	if err != nil {
+		return nil, apperror.Internal("generate conversation summary", err)
+	}
+	summary = strings.TrimSpace(stripSummaryMarkdownEmphasis(summary))
+	if summary == "" {
+		return nil, apperror.Internal("generate conversation summary", errors.New("gemini returned an empty summary"))
+	}
+
+	now := time.Now()
+	conv.AISummary = &summary
+	conv.AISummaryGeneratedAt = &now
+	if err := uc.convRepo.Update(ctx, conv); err != nil {
+		return nil, err
+	}
+	return conv, nil
+}
+
+// buildSummaryTranscript mirrors internal/usecase/ai's buildTranscript
+// (same newest-first-in, oldest-first-out reversal, same media-placeholder
+// approach for a captionless attachment) but labels each turn by its
+// actual sender_type rather than a flat "Customer"/"You" — Summarize's
+// whole point is telling the admin whether the AI, a human teammate, or
+// nobody actually handled the customer, so collapsing that distinction
+// here would defeat the feature.
+func buildSummaryTranscript(history []*entity.Message) string {
+	var b strings.Builder
+	for i := len(history) - 1; i >= 0; i-- {
+		m := history[i]
+		speaker := "Mijoz"
+		if m.Direction == entity.MessageDirectionOutbound {
+			switch m.SenderType {
+			case entity.MessageSenderHuman:
+				speaker = "Jamoa"
+			case entity.MessageSenderSystem:
+				speaker = "Tizim"
+			default:
+				speaker = "AI"
+			}
+		}
+		switch {
+		case m.Content != nil && strings.TrimSpace(*m.Content) != "":
+			fmt.Fprintf(&b, "%s: %s\n", speaker, *m.Content)
+		case m.MessageType == entity.MessageTypeImage:
+			fmt.Fprintf(&b, "%s: [rasm yubordi]\n", speaker)
+		case m.MessageType == entity.MessageTypeAudio:
+			fmt.Fprintf(&b, "%s: [ovozli xabar yubordi]\n", speaker)
+		case m.MessageType == entity.MessageTypeVideo:
+			fmt.Fprintf(&b, "%s: [video yubordi]\n", speaker)
+		}
+	}
+	return b.String()
+}
+
+// summaryMarkdownEmphasisRegex / stripSummaryMarkdownEmphasis mirror
+// internal/usecase/ai's markdownEmphasisRegex/stripMarkdownEmphasis exactly
+// — same backstop against Gemini emitting **bold**/*italic* despite being
+// told not to, just applied to a summary shown in the dashboard rather
+// than a reply sent to a customer. Duplicated, not shared, for the same
+// "usecases don't depend on each other" reason as everything else in this
+// file.
+var summaryMarkdownEmphasisRegex = regexp.MustCompile(`\*\*(.+?)\*\*|__(.+?)__|\*(.+?)\*|_(.+?)_`)
+
+func stripSummaryMarkdownEmphasis(text string) string {
+	return summaryMarkdownEmphasisRegex.ReplaceAllStringFunc(text, func(match string) string {
+		groups := summaryMarkdownEmphasisRegex.FindStringSubmatch(match)
+		for _, g := range groups[1:] {
+			if g != "" {
+				return g
+			}
+		}
+		return match
 	})
 }

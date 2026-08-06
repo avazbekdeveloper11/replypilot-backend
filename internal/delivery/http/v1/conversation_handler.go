@@ -284,6 +284,39 @@ func (h *ConversationHandler) SendMessage(c *gin.Context) {
 	response.OK(c, toMessageResponse(msg))
 }
 
+// Summarize godoc
+// @Summary      Generate (or regenerate) an AI summary of this conversation
+// @Description  On-demand only — see usecase.Summarize's doc comment. Always overwrites any previous summary.
+// @Tags         conversations
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id path string true "Conversation ID"
+// @Success      200 {object} response.Envelope{data=ConversationResponse}
+// @Failure      400 {object} response.Envelope
+// @Failure      404 {object} response.Envelope
+// @Router       /v1/conversations/{id}/summary [post]
+func (h *ConversationHandler) Summarize(c *gin.Context) {
+	orgID, err := orgIDFromContext(c)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.Error(apperror.InvalidInput("invalid conversation id", err))
+		return
+	}
+
+	conv, err := h.uc.Summarize(c.Request.Context(), orgID, id)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+
+	response.OK(c, toConversationResponse(conv))
+}
+
 func toConversationResponse(conv *entity.Conversation) ConversationResponse {
 	resp := ConversationResponse{
 		ID:                 conv.ID.String(),
@@ -292,10 +325,15 @@ func toConversationResponse(conv *entity.Conversation) ConversationResponse {
 		CustomerUsername:   conv.CustomerUsername,
 		LastMessagePreview: conv.LastMessagePreview,
 		UnreadCount:        conv.UnreadCount,
+		AISummary:          conv.AISummary,
 	}
 	if conv.LastMessageAt != nil {
 		formatted := conv.LastMessageAt.Format(time.RFC3339)
 		resp.LastMessageAt = &formatted
+	}
+	if conv.AISummaryGeneratedAt != nil {
+		formatted := conv.AISummaryGeneratedAt.Format(time.RFC3339)
+		resp.AISummaryGeneratedAt = &formatted
 	}
 	return resp
 }

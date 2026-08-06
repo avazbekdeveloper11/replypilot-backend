@@ -20,4 +20,19 @@ type OrderRepository interface {
 	// Prepare treats that as "create one now", not an error condition.
 	FindByTransactionParam(ctx context.Context, orgID uuid.UUID, transactionParam string) (*entity.Order, error)
 	Update(ctx context.Context, order *entity.Order) error
+	// Stats is a real aggregate query (COUNT/SUM over status='paid'), not
+	// something Gemini computes — internal/usecase/insights only asks
+	// Gemini to narrate this alongside a qualitative read of recent
+	// messages. Every order in this codebase currently originates from an
+	// AI-sent Click link (see internal/usecase/ai.buildProductContext), so
+	// this IS "how many sales did we make through the AI" — not an
+	// approximation of it.
+	Stats(ctx context.Context, orgID uuid.UUID) (*OrderStats, error)
+}
+
+// OrderStats is Stats' result shape — mirrors repository.ConversationStats'
+// role for the dashboard's existing aggregate queries.
+type OrderStats struct {
+	PaidCount       int
+	PaidAmountCents int64
 }

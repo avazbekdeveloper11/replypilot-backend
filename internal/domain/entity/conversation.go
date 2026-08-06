@@ -54,7 +54,16 @@ type Conversation struct {
 	LastMessageAt      *time.Time
 	LastMessagePreview *string
 	UnreadCount        int
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
-	DeletedAt          *time.Time
+	// AISummary is an on-demand, cached AI summary of what this customer
+	// and the business actually discussed — see
+	// conversation.UseCase.Summarize's doc comment. Nil until an admin
+	// generates one; not kept in sync automatically as new messages arrive,
+	// so AISummaryGeneratedAt is surfaced alongside it (the frontend shows
+	// "generated 2 hours ago, might be stale" rather than implying it's
+	// live).
+	AISummary            *string
+	AISummaryGeneratedAt *time.Time
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+	DeletedAt            *time.Time
 }

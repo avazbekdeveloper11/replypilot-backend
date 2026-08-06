@@ -36,6 +36,7 @@ type Handlers struct {
 	Product      *v1.ProductHandler
 	Click        *v1.ClickHandler
 	Lead         *v1.LeadHandler
+	Insights     *v1.InsightsHandler
 }
 
 // Middlewares bundles the gin.HandlerFuncs that need constructed
@@ -144,6 +145,7 @@ func NewRouter(h Handlers, mw Middlewares) *gin.Engine {
 			protected.POST("/conversations/:id/messages", h.Conversation.SendMessage)
 			protected.PATCH("/conversations/:id/take-over", h.Conversation.TakeOver)
 			protected.PATCH("/conversations/:id/resolve", h.Conversation.Resolve)
+			protected.POST("/conversations/:id/summary", h.Conversation.Summarize)
 
 			protected.GET("/dashboard/stats", h.Dashboard.Stats)
 			protected.GET("/dashboard/timeseries", h.Dashboard.TimeSeries)
@@ -170,6 +172,8 @@ func NewRouter(h Handlers, mw Middlewares) *gin.Engine {
 			protected.GET("/analytics/response-time", h.Analytics.ResponseTime)
 			protected.GET("/analytics/ai-usage", h.Analytics.AIUsage)
 			protected.GET("/analytics/conversation-outcomes", h.Analytics.ConversationOutcomes)
+			protected.GET("/analytics/ai-insights", h.Insights.Get)
+			protected.POST("/analytics/ai-insights/regenerate", h.Insights.Regenerate)
 
 			protected.GET("/products", h.Product.List)
 			protected.POST("/products", h.Product.Create)

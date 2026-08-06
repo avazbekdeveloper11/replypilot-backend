@@ -151,17 +151,19 @@ func conversationToModel(c *entity.Conversation) *ConversationModel {
 		channel = entity.ConversationChannelInstagram
 	}
 	model := &ConversationModel{
-		ID:                 c.ID,
-		OrganizationID:     c.OrganizationID,
-		TelegramAccountID:  c.TelegramAccountID,
-		Channel:            string(channel),
-		CustomerIGID:       c.CustomerIGID,
-		CustomerUsername:   c.CustomerUsername,
-		Status:             string(c.Status),
-		AssignedUserID:     c.AssignedUserID,
-		LastMessageAt:      c.LastMessageAt,
-		LastMessagePreview: c.LastMessagePreview,
-		UnreadCount:        c.UnreadCount,
+		ID:                   c.ID,
+		OrganizationID:       c.OrganizationID,
+		TelegramAccountID:    c.TelegramAccountID,
+		Channel:              string(channel),
+		CustomerIGID:         c.CustomerIGID,
+		CustomerUsername:     c.CustomerUsername,
+		Status:               string(c.Status),
+		AssignedUserID:       c.AssignedUserID,
+		LastMessageAt:        c.LastMessageAt,
+		LastMessagePreview:   c.LastMessagePreview,
+		UnreadCount:          c.UnreadCount,
+		AISummary:            c.AISummary,
+		AISummaryGeneratedAt: c.AISummaryGeneratedAt,
 	}
 	// InstagramAccountID must reach the DB as NULL (not the zero UUID) on a
 	// Telegram-channel row — chk_conversations_channel_account requires it.
@@ -174,19 +176,21 @@ func conversationToModel(c *entity.Conversation) *ConversationModel {
 
 func modelToConversation(m *ConversationModel) *entity.Conversation {
 	e := &entity.Conversation{
-		ID:                 m.ID,
-		OrganizationID:     m.OrganizationID,
-		Channel:            entity.ConversationChannel(m.Channel),
-		TelegramAccountID:  m.TelegramAccountID,
-		CustomerIGID:       m.CustomerIGID,
-		CustomerUsername:   m.CustomerUsername,
-		Status:             entity.ConversationStatus(m.Status),
-		AssignedUserID:     m.AssignedUserID,
-		LastMessageAt:      m.LastMessageAt,
-		LastMessagePreview: m.LastMessagePreview,
-		UnreadCount:        m.UnreadCount,
-		CreatedAt:          m.CreatedAt,
-		UpdatedAt:          m.UpdatedAt,
+		ID:                   m.ID,
+		OrganizationID:       m.OrganizationID,
+		Channel:              entity.ConversationChannel(m.Channel),
+		TelegramAccountID:    m.TelegramAccountID,
+		CustomerIGID:         m.CustomerIGID,
+		CustomerUsername:     m.CustomerUsername,
+		Status:               entity.ConversationStatus(m.Status),
+		AssignedUserID:       m.AssignedUserID,
+		LastMessageAt:        m.LastMessageAt,
+		LastMessagePreview:   m.LastMessagePreview,
+		UnreadCount:          m.UnreadCount,
+		AISummary:            m.AISummary,
+		AISummaryGeneratedAt: m.AISummaryGeneratedAt,
+		CreatedAt:            m.CreatedAt,
+		UpdatedAt:            m.UpdatedAt,
 	}
 	if m.InstagramAccountID != nil {
 		e.InstagramAccountID = *m.InstagramAccountID
