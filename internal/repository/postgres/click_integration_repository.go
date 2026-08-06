@@ -33,6 +33,7 @@ func (r *ClickIntegrationRepository) Upsert(ctx context.Context, integration *en
 			existing.MerchantID = integration.MerchantID
 			existing.ServiceID = integration.ServiceID
 			existing.MerchantUserID = integration.MerchantUserID
+			existing.SecretKeyEncrypted = integration.SecretKeyEncrypted
 			existing.ConnectedByUserID = integration.ConnectedByUserID
 			if err := tx.Save(&existing).Error; err != nil {
 				return err
@@ -73,6 +74,28 @@ func (r *ClickIntegrationRepository) FindByOrganization(ctx context.Context, org
 	return modelToClickIntegration(&model), nil
 }
 
+// FindByServiceIDForWebhook deliberately does NOT go through withTenant —
+// see the interface doc comment and migration 000015's webhook_account_lookup
+// policy, the same SET LOCAL app.webhook_lookup pattern
+// TelegramAccountRepository.FindByIDForWebhook uses (see that method's doc
+// comment for the full RLS rationale, not repeated here).
+func (r *ClickIntegrationRepository) FindByServiceIDForWebhook(ctx context.Context, serviceID string) (*entity.ClickIntegration, error) {
+	var model ClickIntegrationModel
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("SET LOCAL app.webhook_lookup = 'on'").Error; err != nil {
+			return err
+		}
+		return tx.First(&model, "service_id = ?", serviceID).Error
+	})
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, apperror.NotFound("click integration not found")
+		}
+		return nil, apperror.Internal("find click integration for webhook", err)
+	}
+	return modelToClickIntegration(&model), nil
+}
+
 func (r *ClickIntegrationRepository) Delete(ctx context.Context, orgID uuid.UUID) error {
 	var rowsAffected int64
 	err := withTenant(ctx, r.db, orgID, func(tx *gorm.DB) error {
@@ -91,25 +114,27 @@ func (r *ClickIntegrationRepository) Delete(ctx context.Context, orgID uuid.UUID
 
 func clickIntegrationToModel(c *entity.ClickIntegration) *ClickIntegrationModel {
 	return &ClickIntegrationModel{
-		ID:                c.ID,
-		OrganizationID:    c.OrganizationID,
-		MerchantID:        c.MerchantID,
-		ServiceID:         c.ServiceID,
-		MerchantUserID:    c.MerchantUserID,
-		ConnectedByUserID: c.ConnectedByUserID,
+		ID:                 c.ID,
+		OrganizationID:     c.OrganizationID,
+		MerchantID:         c.MerchantID,
+		ServiceID:          c.ServiceID,
+		MerchantUserID:     c.MerchantUserID,
+		SecretKeyEncrypted: c.SecretKeyEncrypted,
+		ConnectedByUserID:  c.ConnectedByUserID,
 	}
 }
 
 func modelToClickIntegration(m *ClickIntegrationModel) *entity.ClickIntegration {
 	e := &entity.ClickIntegration{
-		ID:                m.ID,
-		OrganizationID:    m.OrganizationID,
-		MerchantID:        m.MerchantID,
-		ServiceID:         m.ServiceID,
-		MerchantUserID:    m.MerchantUserID,
-		ConnectedByUserID: m.ConnectedByUserID,
-		CreatedAt:         m.CreatedAt,
-		UpdatedAt:         m.UpdatedAt,
+		ID:                 m.ID,
+		OrganizationID:     m.OrganizationID,
+		MerchantID:         m.MerchantID,
+		ServiceID:          m.ServiceID,
+		MerchantUserID:     m.MerchantUserID,
+		SecretKeyEncrypted: m.SecretKeyEncrypted,
+		ConnectedByUserID:  m.ConnectedByUserID,
+		CreatedAt:          m.CreatedAt,
+		UpdatedAt:          m.UpdatedAt,
 	}
 	if m.DeletedAt.Valid {
 		t := m.DeletedAt.Time

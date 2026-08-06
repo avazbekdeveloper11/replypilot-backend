@@ -1,14 +1,16 @@
-// Package clickapi builds payment links for Click (click.uz), a Uzbek
-// payment provider. This is deliberately NOT a full merchant API client —
-// no order-creation call, no webhook-signature verification, no
-// PREPARE/COMPLETE handshake (the "Shop API" scheme click-integration-php
-// and similar SDKs implement). It's exactly one thing: build the redirect
-// URL documented at https://docs.click.uz/en/click-button/, given an
-// amount and the org's own merchant_id/service_id
-// (entity.ClickIntegration). Confirming a payment actually happened (via
-// Click's PREPARE/COMPLETE webhook) is real, separate follow-up work, not
-// implemented here — see internal/usecase/ai's product-context doc comment
-// for the current scope.
+// Package clickapi is the client-side counterpart to Click (click.uz), a
+// Uzbek payment provider. link.go builds the redirect URL documented at
+// https://docs.click.uz/en/click-button/, given an amount and the org's own
+// merchant_id/service_id (entity.ClickIntegration) — no HTTP call, pure URL
+// construction. webhook.go is the other half: verifying and responding to
+// Click's own Prepare/Complete Shop API callback (the "Merchant API"/"Shop
+// API" scheme click-integration-php and similar SDKs implement), used by
+// internal/usecase/payment.WebhookUseCase to confirm a payment actually
+// happened rather than just that a link was generated. This package still
+// does not implement a full merchant API client (no order-creation call,
+// no card/invoice flows — see click-integration-php for that scheme) — just
+// the redirect-link half and the confirmation-webhook half this codebase
+// actually uses.
 package clickapi
 
 import (
@@ -35,10 +37,12 @@ type PaymentLinkInput struct {
 	// being obviously wrong in the resulting URL.
 	Amount string
 	// TransactionParam is Click's merchant-side order/reference id —
-	// mandatory, but this codebase has no order/invoice entity yet, so
-	// callers pass a freshly generated identifier (e.g. a UUID). It is
-	// never looked up again — there is no PREPARE/COMPLETE webhook handler
-	// here to match it against (see package doc comment).
+	// mandatory. internal/usecase/ai.buildProductContext passes
+	// "{conversationID}-{productID}" (two hyphenated UUID strings, each a
+	// fixed 36 characters — see webhook.go's parseTransactionParam for how
+	// that's split back apart), deterministic per conversation+product so
+	// building the same link twice in one conversation resolves to the same
+	// eventual order rather than creating a duplicate.
 	TransactionParam string
 	ReturnURL        string // optional
 }

@@ -16,5 +16,13 @@ type ClickIntegrationRepository interface {
 	// organization_id.
 	Upsert(ctx context.Context, integration *entity.ClickIntegration) error
 	FindByOrganization(ctx context.Context, orgID uuid.UUID) (*entity.ClickIntegration, error)
+	// FindByServiceIDForWebhook deliberately does NOT go through the normal
+	// tenant-scoped query path — see TelegramAccountRepository.FindByIDForWebhook's
+	// doc comment for the identical SET LOCAL app.webhook_lookup rationale.
+	// Click's Prepare/Complete callback has no org context at all until this
+	// call resolves one from the service_id in the payload; every other
+	// order/payment lookup after that point uses the normal tenant-scoped
+	// path once the org is known.
+	FindByServiceIDForWebhook(ctx context.Context, serviceID string) (*entity.ClickIntegration, error)
 	Delete(ctx context.Context, orgID uuid.UUID) error
 }

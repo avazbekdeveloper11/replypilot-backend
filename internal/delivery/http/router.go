@@ -24,6 +24,7 @@ type Handlers struct {
 	Telegram     *v1.TelegramHandler
 	Webhook      *v1.WebhookHandler
 	TelegramWebhook *v1.TelegramWebhookHandler
+	ClickWebhook *v1.ClickWebhookHandler
 	Conversation *v1.ConversationHandler
 	Dashboard    *v1.DashboardHandler
 	Team         *v1.TeamHandler
@@ -87,6 +88,13 @@ func NewRouter(h Handlers, mw Middlewares) *gin.Engine {
 	// logged-in user either. Authenticated via the X-Telegram-Bot-Api-Secret-Token
 	// header instead (see TelegramWebhookHandler.Receive / config.TelegramConfig).
 	webhooks.POST("/telegram/:id", h.TelegramWebhook.Receive)
+	// No JWT, same reasoning as the two webhooks above — Click is not a
+	// logged-in user. Authenticated instead via the per-org secret key
+	// signature check inside payment.WebhookUseCase.Process (there is no
+	// shared platform-wide secret here, unlike Telegram's header: Click
+	// posts one org's service_id in the body itself, and that org's own
+	// secret key is what verifies it — see ClickIntegration.SecretKeyEncrypted).
+	webhooks.POST("/click", h.ClickWebhook.Receive)
 
 	v1Group := r.Group("/v1")
 	{

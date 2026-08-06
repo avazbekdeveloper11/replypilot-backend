@@ -853,7 +853,11 @@ func (uc *UseCase) buildProductContext(ctx context.Context, orgID, conversationI
 				ServiceID:        clickIntegration.ServiceID,
 				MerchantUserID:   derefOr(clickIntegration.MerchantUserID, ""),
 				Amount:           clickapi.FormatAmount(p.PriceCents),
-				TransactionParam: conversationID.String() + "-" + p.ID.String(),
+				// See clickapi.BuildTransactionParam's doc comment — kept as
+				// the single source of truth for this format so
+				// payment.WebhookUseCase's ParseTransactionParam can never
+				// drift out of sync with how this string is built.
+				TransactionParam: clickapi.BuildTransactionParam(conversationID, p.ID),
 			})
 			fmt.Fprintf(&b, "\n  Payment link (send this EXACT text if they want to buy this): %s", link)
 		}

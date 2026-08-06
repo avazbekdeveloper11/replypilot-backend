@@ -12,32 +12,45 @@ import (
 	"github.com/replypilot/backend/internal/domain/apperror"
 	"github.com/replypilot/backend/internal/domain/entity"
 	"github.com/replypilot/backend/internal/domain/repository"
+	"github.com/replypilot/backend/pkg/crypto"
 )
 
 type UseCase struct {
-	repo repository.ClickIntegrationRepository
+	repo      repository.ClickIntegrationRepository
+	encryptor *crypto.AESGCMEncryptor
 }
 
-func New(repo repository.ClickIntegrationRepository) *UseCase {
-	return &UseCase{repo: repo}
+func New(repo repository.ClickIntegrationRepository, encryptor *crypto.AESGCMEncryptor) *UseCase {
+	return &UseCase{repo: repo, encryptor: encryptor}
 }
 
 type ConnectInput struct {
-	OrganizationID    uuid.UUID
-	MerchantID        string
-	ServiceID         string
-	MerchantUserID    *string
+	OrganizationID uuid.UUID
+	MerchantID     string
+	ServiceID      string
+	MerchantUserID *string
+	// SecretKey is Click's own webhook-signing secret (from the org's Click
+	// merchant cabinet, distinct from MerchantID/ServiceID — see
+	// entity.ClickIntegration.SecretKeyEncrypted's doc comment). Required:
+	// without it, payment.WebhookUseCase can never verify a Prepare/Complete
+	// callback for this org, so a payment link would be sent but never
+	// actually confirmed.
+	SecretKey         string
 	ConnectedByUserID uuid.UUID
 }
 
 func (uc *UseCase) Connect(ctx context.Context, in ConnectInput) (*entity.ClickIntegration, error) {
 	merchantID := strings.TrimSpace(in.MerchantID)
 	serviceID := strings.TrimSpace(in.ServiceID)
+	secretKey := strings.TrimSpace(in.SecretKey)
 	if merchantID == "" {
 		return nil, apperror.InvalidInput("merchant_id is required", nil)
 	}
 	if serviceID == "" {
 		return nil, apperror.InvalidInput("service_id is required", nil)
+	}
+	if secretKey == "" {
+		return nil, apperror.InvalidInput("secret_key is required", nil)
 	}
 
 	var merchantUserID *string
@@ -48,13 +61,19 @@ func (uc *UseCase) Connect(ctx context.Context, in ConnectInput) (*entity.ClickI
 		}
 	}
 
+	encryptedSecret, err := uc.encryptor.Encrypt(secretKey)
+	if err != nil {
+		return nil, apperror.Internal("encrypt click secret key", err)
+	}
+
 	connectedBy := in.ConnectedByUserID
 	integration := &entity.ClickIntegration{
-		OrganizationID:    in.OrganizationID,
-		MerchantID:        merchantID,
-		ServiceID:         serviceID,
-		MerchantUserID:    merchantUserID,
-		ConnectedByUserID: &connectedBy,
+		OrganizationID:     in.OrganizationID,
+		MerchantID:         merchantID,
+		ServiceID:          serviceID,
+		MerchantUserID:     merchantUserID,
+		SecretKeyEncrypted: encryptedSecret,
+		ConnectedByUserID:  &connectedBy,
 	}
 	if err := uc.repo.Upsert(ctx, integration); err != nil {
 		return nil, err

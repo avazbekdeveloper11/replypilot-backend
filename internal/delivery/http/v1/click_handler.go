@@ -48,7 +48,7 @@ func (h *ClickHandler) Get(c *gin.Context) {
 
 // Connect godoc
 // @Summary      Connect (or reconnect) Click
-// @Description  Stores the org's Click merchant_id/service_id — see entity.ClickIntegration's doc comment on why these are not secrets. Calling this again replaces the existing connection in place.
+// @Description  Stores the org's Click merchant_id/service_id/secret_key — see entity.ClickIntegration's doc comment on why the first two are public identifiers but secret_key (required, used to verify Click's Prepare/Complete webhook) is encrypted at rest and never echoed back. Calling this again replaces the existing connection in place.
 // @Tags         integrations
 // @Accept       json
 // @Produce      json
@@ -79,6 +79,7 @@ func (h *ClickHandler) Connect(c *gin.Context) {
 		MerchantID:        req.MerchantID,
 		ServiceID:         req.ServiceID,
 		MerchantUserID:    req.MerchantUserID,
+		SecretKey:         req.SecretKey,
 		ConnectedByUserID: userID,
 	})
 	if err != nil {

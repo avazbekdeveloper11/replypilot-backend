@@ -302,18 +302,39 @@ type ProductModel struct {
 func (ProductModel) TableName() string { return "products" }
 
 type ClickIntegrationModel struct {
-	ID                uuid.UUID      `gorm:"column:id;type:uuid;primaryKey"`
-	OrganizationID    uuid.UUID      `gorm:"column:organization_id;type:uuid"`
-	MerchantID        string         `gorm:"column:merchant_id"`
-	ServiceID         string         `gorm:"column:service_id"`
-	MerchantUserID    *string        `gorm:"column:merchant_user_id"`
-	ConnectedByUserID *uuid.UUID     `gorm:"column:connected_by_user_id;type:uuid"`
-	CreatedAt         time.Time      `gorm:"column:created_at"`
-	UpdatedAt         time.Time      `gorm:"column:updated_at"`
-	DeletedAt         gorm.DeletedAt `gorm:"column:deleted_at;index"`
+	ID                 uuid.UUID      `gorm:"column:id;type:uuid;primaryKey"`
+	OrganizationID     uuid.UUID      `gorm:"column:organization_id;type:uuid"`
+	MerchantID         string         `gorm:"column:merchant_id"`
+	ServiceID          string         `gorm:"column:service_id"`
+	MerchantUserID     *string        `gorm:"column:merchant_user_id"`
+	SecretKeyEncrypted []byte         `gorm:"column:secret_key_encrypted"`
+	ConnectedByUserID  *uuid.UUID     `gorm:"column:connected_by_user_id;type:uuid"`
+	CreatedAt          time.Time      `gorm:"column:created_at"`
+	UpdatedAt          time.Time      `gorm:"column:updated_at"`
+	DeletedAt          gorm.DeletedAt `gorm:"column:deleted_at;index"`
 }
 
 func (ClickIntegrationModel) TableName() string { return "click_integrations" }
+
+// OrderModel maps to orders — see entity.Order's doc comment for what this
+// row represents and when it's created.
+type OrderModel struct {
+	ID                    uuid.UUID  `gorm:"column:id;type:uuid;primaryKey"`
+	OrganizationID        uuid.UUID  `gorm:"column:organization_id;type:uuid"`
+	ConversationID        uuid.UUID  `gorm:"column:conversation_id;type:uuid"`
+	ProductID             *uuid.UUID `gorm:"column:product_id;type:uuid"`
+	ProductNameSnapshot   string     `gorm:"column:product_name_snapshot"`
+	AmountCents           int64      `gorm:"column:amount_cents"`
+	Currency              string     `gorm:"column:currency"`
+	Status                string     `gorm:"column:status"`
+	ClickTransactionParam string     `gorm:"column:click_transaction_param"`
+	ClickTransID          *int64     `gorm:"column:click_trans_id"`
+	PaidAt                *time.Time `gorm:"column:paid_at"`
+	CreatedAt             time.Time  `gorm:"column:created_at"`
+	UpdatedAt             time.Time  `gorm:"column:updated_at"`
+}
+
+func (OrderModel) TableName() string { return "orders" }
 
 // LeadModel maps to dm_leads, not leads: migration 000001 already owns an
 // unrelated "leads" table (dead CRM-style schema, no Go code behind it) —

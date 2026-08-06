@@ -180,6 +180,9 @@ type UpdateProductRequest struct {
 // service_id are Click's own public identifiers (see
 // entity.ClickIntegration's doc comment), safe to round-trip to the
 // dashboard as-is so the settings card can show what's currently connected.
+// SecretKeyEncrypted deliberately has no field here at all, unlike the two
+// above — it's a real secret (webhook signature verification), never sent
+// back to the browser once saved.
 type ClickIntegrationResponse struct {
 	MerchantID     string  `json:"merchant_id"`
 	ServiceID      string  `json:"service_id"`
@@ -208,6 +211,9 @@ type ConnectClickRequest struct {
 	MerchantID     string  `json:"merchant_id" binding:"required"`
 	ServiceID      string  `json:"service_id" binding:"required"`
 	MerchantUserID *string `json:"merchant_user_id"`
+	// SecretKey is never echoed back — see ClickIntegrationResponse's doc
+	// comment for why the response type has no field for it at all.
+	SecretKey string `json:"secret_key" binding:"required"`
 }
 
 type PlanResponse struct {

@@ -49,6 +49,7 @@ import (
 	knowledgebaseuc "github.com/replypilot/backend/internal/usecase/knowledgebase"
 	leaduc "github.com/replypilot/backend/internal/usecase/lead"
 	organizationuc "github.com/replypilot/backend/internal/usecase/organization"
+	paymentuc "github.com/replypilot/backend/internal/usecase/payment"
 	platformsettingsuc "github.com/replypilot/backend/internal/usecase/platformsettings"
 	productuc "github.com/replypilot/backend/internal/usecase/product"
 	teamuc "github.com/replypilot/backend/internal/usecase/team"
@@ -133,6 +134,7 @@ func New(cfg *config.Config) (*Container, error) {
 	clickIntegrationRepo := postgresrepo.NewClickIntegrationRepository(db)
 	leadRepo := postgresrepo.NewLeadRepository(db)
 	telegramAccountRepo := postgresrepo.NewTelegramAccountRepository(db)
+	orderRepo := postgresrepo.NewOrderRepository(db)
 	refreshTokenStore := redisrepo.NewRefreshTokenStore(redisClient)
 	oauthStateStore := redisrepo.NewOAuthStateStore(redisClient)
 	otpStore := redisrepo.NewOTPStore(redisClient)
@@ -172,8 +174,13 @@ func New(cfg *config.Config) (*Container, error) {
 	adminUseCase := adminuc.New(adminRepo, orgRepo)
 	platformSettingsUseCase := platformsettingsuc.New(platformSettingsRepo, encryptor)
 	productUseCase := productuc.New(productRepo)
-	clickUseCase := clickuc.New(clickIntegrationRepo)
+	clickUseCase := clickuc.New(clickIntegrationRepo, encryptor)
 	leadUseCase := leaduc.New(leadRepo)
+	// clickIntegrationRepo, instagramAccountRepo/graphClient, and
+	// telegramAccountRepo/telegramClient are each passed once more here —
+	// same "one concrete instance, several narrow ports" pattern as
+	// conversationUseCase and aiUseCase above, not new instances.
+	paymentWebhookUseCase := paymentuc.New(clickIntegrationRepo, orderRepo, conversationRepo, productRepo, messageRepo, instagramAccountRepo, graphClient, telegramAccountRepo, telegramClient, encryptor, logger)
 
 	// --- handlers ---
 	handlers := httpserver.Handlers{
@@ -183,6 +190,7 @@ func New(cfg *config.Config) (*Container, error) {
 		Telegram:     v1.NewTelegramHandler(telegramConnectUseCase),
 		Webhook:      v1.NewWebhookHandler(webhookUseCase),
 		TelegramWebhook: v1.NewTelegramWebhookHandler(telegramWebhookUseCase),
+		ClickWebhook: v1.NewClickWebhookHandler(paymentWebhookUseCase),
 		Conversation: v1.NewConversationHandler(conversationUseCase),
 		Dashboard:    v1.NewDashboardHandler(dashboardUseCase),
 		Team:         v1.NewTeamHandler(teamUseCase),
