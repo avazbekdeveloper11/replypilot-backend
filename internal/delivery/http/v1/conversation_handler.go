@@ -2,6 +2,7 @@ package v1
 
 import (
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -299,12 +300,31 @@ func toConversationResponse(conv *entity.Conversation) ConversationResponse {
 	return resp
 }
 
+// telegramFileURLPrefix matches exactly what telegramapi.Client.ResolveFileURL
+// builds (https://api.telegram.org/file/bot<token>/<path>) — the bot token
+// is embedded in the URL path itself, unlike Meta's attachment CDN links
+// (webhookAttachmentPayload.URL), which are pre-signed by Meta and carry
+// none of this codebase's own secrets. Sending that URL to the browser in
+// an API response would hand every dashboard viewer the org's live
+// Telegram bot token (full control of the bot) via the network tab / img
+// src — so it's withheld here rather than passed through like Instagram's
+// AttachmentURL is. A real fix (fetch-and-stream through an authenticated
+// backend proxy endpoint) is a follow-up, not built yet — see MessageType
+// still being set so the frontend can at least show a "[Voice message]"
+// label instead of nothing.
+const telegramFileURLPrefix = "https://api.telegram.org/file/"
+
 func toMessageResponse(m *entity.Message) MessageResponse {
-	return MessageResponse{
-		ID:         m.ID.String(),
-		Direction:  string(m.Direction),
-		SenderType: string(m.SenderType),
-		Content:    m.Content,
-		CreatedAt:  m.CreatedAt.Format(time.RFC3339),
+	resp := MessageResponse{
+		ID:          m.ID.String(),
+		Direction:   string(m.Direction),
+		SenderType:  string(m.SenderType),
+		MessageType: string(m.MessageType),
+		Content:     m.Content,
+		CreatedAt:   m.CreatedAt.Format(time.RFC3339),
 	}
+	if m.AttachmentURL != nil && !strings.HasPrefix(*m.AttachmentURL, telegramFileURLPrefix) {
+		resp.AttachmentURL = m.AttachmentURL
+	}
+	return resp
 }

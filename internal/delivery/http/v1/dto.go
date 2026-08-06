@@ -350,11 +350,17 @@ type ConversationResponse struct {
 }
 
 type MessageResponse struct {
-	ID         string  `json:"id"`
-	Direction  string  `json:"direction"`
-	SenderType string  `json:"sender_type"`
-	Content    *string `json:"content,omitempty"`
-	CreatedAt  string  `json:"created_at"`
+	ID          string  `json:"id"`
+	Direction   string  `json:"direction"`
+	SenderType  string  `json:"sender_type"`
+	MessageType string  `json:"message_type"`
+	Content     *string `json:"content,omitempty"`
+	// AttachmentURL is omitted (nil) even when the message has an
+	// attachment if the underlying URL would leak a secret — see
+	// toMessageResponse's doc comment. The frontend falls back to a plain
+	// "[Voice message]"-style label using MessageType alone in that case.
+	AttachmentURL *string `json:"attachment_url,omitempty"`
+	CreatedAt     string  `json:"created_at"`
 }
 
 // SendMessageRequest is a human agent's reply from the dashboard — see

@@ -369,7 +369,7 @@ func (uc *UseCase) HandleInboundMessage(ctx context.Context, ev InboundEvent) er
 	if err != nil {
 		return apperror.Internal("generate ai reply", err)
 	}
-	replyText = strings.TrimSpace(replyText)
+	replyText = stripMarkdownEmphasis(strings.TrimSpace(replyText))
 	if replyText == "" {
 		return uc.handoff(ctx, conv)
 	}
@@ -444,11 +444,9 @@ func (uc *UseCase) HandleInboundMessage(ctx context.Context, ev InboundEvent) er
 
 	// Best-effort, after the customer already has their reply — a failure
 	// here must never look like a failure to respond. See
-	// captureLeadIfPresent's doc comment. derefOr guards against latest
-	// being an image-only message with no Content (nil) — a phone number
-	// obviously can't appear in text that doesn't exist, so this just
-	// safely no-ops via extractPhone finding nothing in "".
-	uc.captureLeadIfPresent(ctx, conv, derefOr(latest.Content, ""), history)
+	// captureLeadIfPresent's doc comment and leadCaptureText's for why the
+	// scanned text isn't always just latest.Content.
+	uc.captureLeadIfPresent(ctx, conv, leadCaptureText(latest, replyText), history)
 
 	return uc.updateConversationAfterReply(ctx, conv, replyText)
 }
@@ -570,6 +568,27 @@ func (uc *UseCase) handoff(ctx context.Context, conv *entity.Conversation) error
 		return apperror.Internal("mark conversation pending_human", err)
 	}
 	return nil
+}
+
+// leadCaptureText picks what text captureLeadIfPresent scans for a phone
+// number. Normally that's just the customer's own typed text — but a phone
+// number given by VOICE (or visible in a photo/video) never appears
+// anywhere as Content: latest.Content stays nil for a media message (see
+// entity.Message's doc comment), even though Gemini understood it fine and
+// typically echoes it back for confirmation (observed live: a customer
+// said their number in a voice message, the AI correctly replied quoting
+// it, but no lead was ever created because the old code only ever scanned
+// latest.Content, which was empty). Falling back to replyText when the
+// customer's own message has no text closes that gap for voice/image/video
+// leads without changing behavior for ordinary typed messages, where
+// customerText is already non-empty and wins.
+func leadCaptureText(latest *entity.Message, replyText string) string {
+	if latest != nil {
+		if text := derefOr(latest.Content, ""); text != "" {
+			return text
+		}
+	}
+	return replyText
 }
 
 // captureLeadIfPresent is fire-and-forget: if the customer's latest
@@ -756,6 +775,7 @@ Rules:
 - Keep replies short and conversational, like a real Instagram DM — not an email. A sentence or two, occasionally three.
 - Always look for a natural, non-pushy opening to move the conversation toward a sale — a next step, a question that surfaces their need, or a relevant detail that creates interest.
 - Match the customer's language and tone (e.g. reply in Uzbek if they wrote in Uzbek).
+- Never use markdown formatting — no **bold**, no *italics*, no bullet points, no headers. Instagram and Telegram DMs render plain text only, so any asterisks or underscores you write for emphasis show up literally to the customer instead of being rendered — write plain sentences instead.
 - Do not mention that you are an AI, a language model, or that you're using "context" or "documents" — just answer naturally, like a person on the team would.
 - Payment links are dangerous to get wrong: only ever send a URL that appears character-for-character in the "Products" section below. NEVER type out, construct, guess, modify, or shorten a payment link yourself, even partially — copy it exactly or don't send one. If a customer wants to pay for something that either isn't in the Products list, or is listed there WITHOUT a payment link, do not invent one — tell them warmly that a team member will send payment details shortly.
 - When the customer's latest message includes a photo, actually look at it and respond to what's in it as a natural part of the conversation — it might be a product they're asking about, a screenshot of a question, a payment receipt, a size/color they're showing you, etc. Don't ignore the image and only answer any accompanying text.
@@ -856,6 +876,32 @@ func formatSom(priceCents int64) string {
 		return fmt.Sprintf("%d", som)
 	}
 	return fmt.Sprintf("%d.%02d", som, remainder)
+}
+
+// markdownEmphasisRegex matches **bold**, __bold__, *italic*, or _italic_
+// spans and captures just the inner text. Instagram and Telegram DMs both
+// render as plain text — the customer sees the literal asterisks/
+// underscores, not bold text — and systemPromptTemplate now explicitly
+// tells Gemini not to use markdown, but this is a backstop for whenever it
+// does anyway (observed live: a reply confirming a phone number came back
+// as "**+998 93 444 56 64**", which read to the customer, and in the
+// dashboard, as the number wrapped in literal asterisks — easy to misread
+// as the digits being partially masked/hidden). Deliberately narrow (just
+// emphasis markers, not a full markdown-to-plaintext pass) — headers,
+// lists, links etc. are not things this product's prompt asks Gemini to
+// produce in the first place.
+var markdownEmphasisRegex = regexp.MustCompile(`\*\*(.+?)\*\*|__(.+?)__|\*(.+?)\*|_(.+?)_`)
+
+func stripMarkdownEmphasis(text string) string {
+	return markdownEmphasisRegex.ReplaceAllStringFunc(text, func(match string) string {
+		groups := markdownEmphasisRegex.FindStringSubmatch(match)
+		for _, g := range groups[1:] {
+			if g != "" {
+				return g
+			}
+		}
+		return match
+	})
 }
 
 func derefOr(s *string, fallback string) string {
