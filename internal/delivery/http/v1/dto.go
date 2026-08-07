@@ -560,16 +560,17 @@ type DashboardTimeSeriesPoint struct {
 	Count int64  `json:"count"`
 }
 
-// DashboardAIPerformanceResponse reflects ai_responses as it is today: this
-// codebase has no AI reply pipeline implemented yet (see
-// docs/DASHBOARD_MILESTONE.md), so TotalResponses is 0 and the rest null
-// until that pipeline exists and starts writing rows. Real query, real
-// (currently empty) data — not a mock.
+// DashboardAIPerformanceResponse reflects ai_responses, written to by
+// usecase/ai.UseCase on every AI-generated reply. TotalResponses is 0 and
+// the rest null for an org the AI hasn't replied for yet.
 type DashboardAIPerformanceResponse struct {
 	TotalResponses int64    `json:"total_responses"`
 	AvgConfidence  *float64 `json:"avg_confidence"`
 	AvgLatencyMs   *float64 `json:"avg_latency_ms"`
 	HandoffRate    *float64 `json:"handoff_rate"`
+	// TotalLatencyMs is the sum of every response's latency — total AI
+	// working time, all-time. See repository.AIPerformanceStats.TotalLatencyMs.
+	TotalLatencyMs *float64 `json:"total_latency_ms"`
 }
 
 // DashboardNotificationResponse is an unread conversation surfaced as a

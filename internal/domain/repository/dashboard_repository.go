@@ -34,17 +34,21 @@ type ConversationsPerDay struct {
 	Count int64
 }
 
-// AIPerformanceStats reads from ai_responses, a table this codebase's
-// schema defines but whose write path (the actual AI reply pipeline) has
-// not been built yet — see docs/DASHBOARD_MILESTONE.md. Until that
-// pipeline exists and writes rows, TotalResponses will be 0 and the
-// pointer fields nil. This is a real, honest query against real (empty)
-// data, not a mock.
+// AIPerformanceStats reads from ai_responses, which usecase/ai.UseCase
+// writes a row to on every AI-generated reply. TotalResponses is 0 and the
+// pointer fields nil only for an org that hasn't had the AI handle a
+// message yet, not because the pipeline is unbuilt.
 type AIPerformanceStats struct {
 	TotalResponses int64
 	AvgConfidence  *float64 // 0-1, nil if TotalResponses == 0
 	AvgLatencyMs   *float64
 	HandoffRate    *float64 // 0-1 share of responses that triggered human handoff
+	// TotalLatencyMs is the sum (not average) of every ai_responses.latency_ms
+	// row — "how much wall-clock time the AI has actually spent generating
+	// replies", all-time. Shown on the Dashboard instead of avg-first-response
+	// time, which is dragged up by conversations waiting on a human handoff
+	// and so isn't a fair reflection of the AI's own speed.
+	TotalLatencyMs *float64
 }
 
 // DashboardRepository is read-only aggregate queries backing the Dashboard

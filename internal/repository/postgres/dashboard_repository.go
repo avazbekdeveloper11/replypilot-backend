@@ -155,15 +155,15 @@ func (r *DashboardRepository) AvgFirstResponseSeconds(ctx context.Context, orgID
 
 // AIPerformance reads directly from ai_responses instead of going through
 // a repository/entity pair, because no such pair exists yet — see the doc
-// comment on repository.AIPerformanceStats. total will be 0 today because
-// nothing in this codebase writes to ai_responses yet (no AI pipeline is
-// implemented); once one exists, this query needs no changes.
+// comment on repository.AIPerformanceStats. Populated by usecase/ai.UseCase
+// on every AI-generated reply.
 func (r *DashboardRepository) AIPerformance(ctx context.Context, orgID uuid.UUID) (*repository.AIPerformanceStats, error) {
 	var row struct {
-		Total         int64
-		AvgConfidence sql.NullFloat64
-		AvgLatencyMs  sql.NullFloat64
-		HandoffRate   sql.NullFloat64
+		Total          int64
+		AvgConfidence  sql.NullFloat64
+		AvgLatencyMs   sql.NullFloat64
+		HandoffRate    sql.NullFloat64
+		TotalLatencyMs sql.NullFloat64
 	}
 
 	err := withTenant(ctx, r.db, orgID, func(tx *gorm.DB) error {
@@ -172,7 +172,8 @@ func (r *DashboardRepository) AIPerformance(ctx context.Context, orgID uuid.UUID
 				count(*) AS total,
 				avg(confidence_score) AS avg_confidence,
 				avg(latency_ms) AS avg_latency_ms,
-				(count(*) FILTER (WHERE was_handoff_triggered))::float / NULLIF(count(*), 0) AS handoff_rate
+				(count(*) FILTER (WHERE was_handoff_triggered))::float / NULLIF(count(*), 0) AS handoff_rate,
+				sum(latency_ms) AS total_latency_ms
 			FROM ai_responses
 			WHERE organization_id = ?
 		`, orgID).Scan(&row).Error
@@ -190,6 +191,9 @@ func (r *DashboardRepository) AIPerformance(ctx context.Context, orgID uuid.UUID
 	}
 	if row.HandoffRate.Valid {
 		stats.HandoffRate = &row.HandoffRate.Float64
+	}
+	if row.TotalLatencyMs.Valid {
+		stats.TotalLatencyMs = &row.TotalLatencyMs.Float64
 	}
 	return stats, nil
 }

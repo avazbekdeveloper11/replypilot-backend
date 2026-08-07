@@ -94,7 +94,7 @@ func (h *DashboardHandler) TimeSeries(c *gin.Context) {
 
 // AIPerformance godoc
 // @Summary      AI performance stats
-// @Description  Reads ai_responses directly. This project has no AI reply pipeline implemented yet, so total_responses is 0 today — see docs/DASHBOARD_MILESTONE.md.
+// @Description  Reads ai_responses directly, written to by usecase/ai.UseCase on every AI-generated reply.
 // @Tags         dashboard
 // @Produce      json
 // @Security     BearerAuth
@@ -118,6 +118,7 @@ func (h *DashboardHandler) AIPerformance(c *gin.Context) {
 		AvgConfidence:  stats.AvgConfidence,
 		AvgLatencyMs:   stats.AvgLatencyMs,
 		HandoffRate:    stats.HandoffRate,
+		TotalLatencyMs: stats.TotalLatencyMs,
 	})
 }
 
