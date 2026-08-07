@@ -18,4 +18,8 @@ type OrganizationRepository interface {
 	FindByID(ctx context.Context, id uuid.UUID) (*entity.Organization, error)
 	FindBySlug(ctx context.Context, slug string) (*entity.Organization, error)
 	Update(ctx context.Context, org *entity.Organization) error
+	// UpdateBusinessHours writes just the business-hours gating fields —
+	// see the postgres implementation's doc comment on why this isn't
+	// folded into Update.
+	UpdateBusinessHours(ctx context.Context, orgID uuid.UUID, enabled bool, startMinutes, endMinutes *int) error
 }

@@ -70,3 +70,35 @@ func (h *OrganizationHandler) UpdateMe(c *gin.Context) {
 
 	response.OK(c, toOrgResponse(org))
 }
+
+// UpdateBusinessHours godoc
+// @Summary      Update the current organization's AI business-hours gating
+// @Description  When enabled, the AI only auto-replies from start up to (not including) end, daily, in the org's own timezone (see UpdateMe) — outside that window an inbound message is handed to a human instead. Start/end are "HH:MM", required when enabled=true.
+// @Tags         organizations
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        request body UpdateBusinessHoursRequest true "Business hours"
+// @Success      200 {object} response.Envelope{data=OrgResponse}
+// @Router       /v1/organizations/me/business-hours [patch]
+func (h *OrganizationHandler) UpdateBusinessHours(c *gin.Context) {
+	orgID, err := orgIDFromContext(c)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+
+	var req UpdateBusinessHoursRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.Error(bindError(err))
+		return
+	}
+
+	org, err := h.uc.UpdateBusinessHours(c.Request.Context(), orgID, req.Enabled, req.Start, req.End)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+
+	response.OK(c, toOrgResponse(org))
+}

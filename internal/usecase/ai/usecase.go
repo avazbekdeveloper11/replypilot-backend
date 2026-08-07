@@ -216,6 +216,7 @@ type UseCase struct {
 	msgRepo          repository.MessageRepository
 	accountRepo      repository.InstagramAccountRepository
 	aiRespRepo       repository.AIResponseRepository
+	orgRepo          repository.OrganizationRepository
 	retriever        Retriever
 	generator        Generator
 	sender           Sender
@@ -235,6 +236,7 @@ func New(
 	msgRepo repository.MessageRepository,
 	accountRepo repository.InstagramAccountRepository,
 	aiRespRepo repository.AIResponseRepository,
+	orgRepo repository.OrganizationRepository,
 	retriever Retriever,
 	generator Generator,
 	sender Sender,
@@ -253,6 +255,7 @@ func New(
 		msgRepo:          msgRepo,
 		accountRepo:      accountRepo,
 		aiRespRepo:       aiRespRepo,
+		orgRepo:          orgRepo,
 		retriever:        retriever,
 		generator:        generator,
 		sender:           sender,
@@ -299,6 +302,20 @@ func (uc *UseCase) HandleInboundMessage(ctx context.Context, ev InboundEvent) er
 	// machine.
 	if conv.Status != entity.ConversationStatusAIActive {
 		return nil
+	}
+
+	// Business-hours gating: if the org has restricted automated replies
+	// to a daily window and we're outside it right now, hand off to a
+	// human instead of calling Gemini — same handoff() path already used
+	// below for "nothing usable to reply from". Checked before any RAG/
+	// Gemini work so an outside-hours message costs nothing beyond one
+	// org lookup.
+	org, err := uc.orgRepo.FindByID(ctx, ev.OrganizationID)
+	if err != nil {
+		return err
+	}
+	if !withinBusinessHours(org, time.Now()) {
+		return uc.handoff(ctx, conv)
 	}
 
 	history, err := uc.msgRepo.List(ctx, repository.MessageListParams{

@@ -91,6 +91,7 @@ func run() error {
 	msgRepo := postgresrepo.NewMessageRepository(db)
 	accountRepo := postgresrepo.NewInstagramAccountRepository(db)
 	aiRespRepo := postgresrepo.NewAIResponseRepository(db)
+	orgRepo := postgresrepo.NewOrganizationRepository(db)
 	knowledgeDocRepo := postgresrepo.NewKnowledgeDocumentRepository(db)
 	knowledgeChunkRepo := postgresrepo.NewKnowledgeChunkRepository(db)
 	platformSettingsRepo := postgresrepo.NewPlatformSettingsRepository(db)
@@ -124,7 +125,9 @@ func run() error {
 	// metaClient appears a third time as aiuc.PrivateReplySender, for the
 	// first reply to someone who reached us via a post comment
 	// (comment-to-DM automation) — see that interface's doc comment.
-	aiUseCase := aiuc.New(convRepo, msgRepo, accountRepo, aiRespRepo, knowledgeUseCase, geminiClient, metaClient, encryptor, productRepo, clickIntegrationRepo, leadRepo, geminiClient, metaClient, telegramAccountRepo, telegramClient, metaClient)
+	// orgRepo is new for business-hours gating (see ai.withinBusinessHours) —
+	// the first thing HandleInboundMessage checks after the ai_active gate.
+	aiUseCase := aiuc.New(convRepo, msgRepo, accountRepo, aiRespRepo, orgRepo, knowledgeUseCase, geminiClient, metaClient, encryptor, productRepo, clickIntegrationRepo, leadRepo, geminiClient, metaClient, telegramAccountRepo, telegramClient, metaClient)
 	platformSettingsUseCase := platformsettingsuc.New(platformSettingsRepo, encryptor)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

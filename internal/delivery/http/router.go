@@ -129,6 +129,7 @@ func NewRouter(h Handlers, mw Middlewares) *gin.Engine {
 		{
 			protected.GET("/organizations/me", h.Organization.Me)
 			protected.PATCH("/organizations/me", h.Organization.UpdateMe)
+			protected.PATCH("/organizations/me/business-hours", h.Organization.UpdateBusinessHours)
 
 			protected.GET("/users/me", h.User.Me)
 			protected.PATCH("/users/me", h.User.UpdateProfile)

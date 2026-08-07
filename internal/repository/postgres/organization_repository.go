@@ -67,29 +67,57 @@ func (r *OrganizationRepository) Update(ctx context.Context, org *entity.Organiz
 	return nil
 }
 
+// UpdateBusinessHours writes the business-hours gating fields via an
+// explicit map, not the struct-based Update above — deliberately.
+// GORM's struct-based Updates() silently skips zero-value fields (false,
+// nil), which would make "turn business hours off" (enabled=false) or
+// "clear the start/end minutes" (nil pointers) never actually persist if
+// this rode through the generic Update() path. See product_repository.go's
+// Update for the same map-based pattern used for the same reason.
+func (r *OrganizationRepository) UpdateBusinessHours(ctx context.Context, orgID uuid.UUID, enabled bool, startMinutes, endMinutes *int) error {
+	res := r.db.WithContext(ctx).Model(&OrganizationModel{}).Where("id = ?", orgID).Updates(map[string]any{
+		"business_hours_enabled":       enabled,
+		"business_hours_start_minutes": startMinutes,
+		"business_hours_end_minutes":   endMinutes,
+	})
+	if res.Error != nil {
+		return apperror.Internal("update organization business hours", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return apperror.NotFound("organization not found")
+	}
+	return nil
+}
+
 func organizationToModel(o *entity.Organization) *OrganizationModel {
 	return &OrganizationModel{
-		ID:        o.ID,
-		Name:      o.Name,
-		Slug:      o.Slug,
-		Status:    string(o.Status),
-		Timezone:  o.Timezone,
-		CreatedBy: o.CreatedBy,
-		UpdatedBy: o.UpdatedBy,
+		ID:                        o.ID,
+		Name:                      o.Name,
+		Slug:                      o.Slug,
+		Status:                    string(o.Status),
+		Timezone:                  o.Timezone,
+		BusinessHoursEnabled:      o.BusinessHoursEnabled,
+		BusinessHoursStartMinutes: o.BusinessHoursStartMinutes,
+		BusinessHoursEndMinutes:   o.BusinessHoursEndMinutes,
+		CreatedBy:                 o.CreatedBy,
+		UpdatedBy:                 o.UpdatedBy,
 	}
 }
 
 func modelToOrganization(m *OrganizationModel) *entity.Organization {
 	e := &entity.Organization{
-		ID:        m.ID,
-		Name:      m.Name,
-		Slug:      m.Slug,
-		Status:    entity.OrganizationStatus(m.Status),
-		Timezone:  m.Timezone,
-		CreatedAt: m.CreatedAt,
-		UpdatedAt: m.UpdatedAt,
-		CreatedBy: m.CreatedBy,
-		UpdatedBy: m.UpdatedBy,
+		ID:                        m.ID,
+		Name:                      m.Name,
+		Slug:                      m.Slug,
+		Status:                    entity.OrganizationStatus(m.Status),
+		Timezone:                  m.Timezone,
+		BusinessHoursEnabled:      m.BusinessHoursEnabled,
+		BusinessHoursStartMinutes: m.BusinessHoursStartMinutes,
+		BusinessHoursEndMinutes:   m.BusinessHoursEndMinutes,
+		CreatedAt:                 m.CreatedAt,
+		UpdatedAt:                 m.UpdatedAt,
+		CreatedBy:                 m.CreatedBy,
+		UpdatedBy:                 m.UpdatedBy,
 	}
 	if m.DeletedAt.Valid {
 		t := m.DeletedAt.Time

@@ -89,12 +89,28 @@ type UpdateOrganizationRequest struct {
 	Timezone string `json:"timezone" binding:"omitempty"`
 }
 
+// UpdateBusinessHoursRequest drives PATCH /v1/organizations/me/business-hours.
+// Start/End are "HH:MM" (24-hour) strings, required only when Enabled is
+// true — see organization.UseCase.UpdateBusinessHours.
+type UpdateBusinessHoursRequest struct {
+	Enabled bool   `json:"enabled"`
+	Start   string `json:"start" binding:"omitempty"`
+	End     string `json:"end" binding:"omitempty"`
+}
+
+// OrgResponse's BusinessHours* fields mirror entity.Organization's —
+// Start/End are formatted back to "HH:MM" strings (from stored minutes)
+// and omitted when unset, same convention as CustomerSummaryResponse's
+// optional timestamps.
 type OrgResponse struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Slug     string `json:"slug"`
-	Status   string `json:"status"`
-	Timezone string `json:"timezone"`
+	ID                   string  `json:"id"`
+	Name                 string  `json:"name"`
+	Slug                 string  `json:"slug"`
+	Status               string  `json:"status"`
+	Timezone             string  `json:"timezone"`
+	BusinessHoursEnabled bool    `json:"business_hours_enabled"`
+	BusinessHoursStart   *string `json:"business_hours_start,omitempty"`
+	BusinessHoursEnd     *string `json:"business_hours_end,omitempty"`
 }
 
 type RoleResponse struct {

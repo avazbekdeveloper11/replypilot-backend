@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -255,10 +256,25 @@ func toAuthResponse(r *auth.Result) AuthResponse {
 
 func toOrgResponse(o *entity.Organization) OrgResponse {
 	return OrgResponse{
-		ID:       o.ID.String(),
-		Name:     o.Name,
-		Slug:     o.Slug,
-		Status:   string(o.Status),
-		Timezone: o.Timezone,
+		ID:                   o.ID.String(),
+		Name:                 o.Name,
+		Slug:                 o.Slug,
+		Status:               string(o.Status),
+		Timezone:             o.Timezone,
+		BusinessHoursEnabled: o.BusinessHoursEnabled,
+		BusinessHoursStart:   formatClockMinutes(o.BusinessHoursStartMinutes),
+		BusinessHoursEnd:     formatClockMinutes(o.BusinessHoursEndMinutes),
 	}
+}
+
+// formatClockMinutes renders minutes-since-midnight back to "HH:MM",
+// mirroring organization.businessHoursTimeLayout on the way in. Returns
+// nil for nil input so OrgResponse's omitempty fields disappear entirely
+// rather than serializing as a misleading "00:00".
+func formatClockMinutes(minutes *int) *string {
+	if minutes == nil {
+		return nil
+	}
+	formatted := fmt.Sprintf("%02d:%02d", *minutes/60, *minutes%60)
+	return &formatted
 }

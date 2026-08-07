@@ -21,16 +21,19 @@ import (
 )
 
 type OrganizationModel struct {
-	ID        uuid.UUID      `gorm:"column:id;type:uuid;primaryKey"`
-	Name      string         `gorm:"column:name"`
-	Slug      string         `gorm:"column:slug"`
-	Status    string         `gorm:"column:status"`
-	Timezone  string         `gorm:"column:timezone"`
-	CreatedAt time.Time      `gorm:"column:created_at"`
-	UpdatedAt time.Time      `gorm:"column:updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"column:deleted_at;index"`
-	CreatedBy *uuid.UUID     `gorm:"column:created_by;type:uuid"`
-	UpdatedBy *uuid.UUID     `gorm:"column:updated_by;type:uuid"`
+	ID                        uuid.UUID      `gorm:"column:id;type:uuid;primaryKey"`
+	Name                      string         `gorm:"column:name"`
+	Slug                      string         `gorm:"column:slug"`
+	Status                    string         `gorm:"column:status"`
+	Timezone                  string         `gorm:"column:timezone"`
+	BusinessHoursEnabled      bool           `gorm:"column:business_hours_enabled"`
+	BusinessHoursStartMinutes *int           `gorm:"column:business_hours_start_minutes"`
+	BusinessHoursEndMinutes   *int           `gorm:"column:business_hours_end_minutes"`
+	CreatedAt                 time.Time      `gorm:"column:created_at"`
+	UpdatedAt                 time.Time      `gorm:"column:updated_at"`
+	DeletedAt                 gorm.DeletedAt `gorm:"column:deleted_at;index"`
+	CreatedBy                 *uuid.UUID     `gorm:"column:created_by;type:uuid"`
+	UpdatedBy                 *uuid.UUID     `gorm:"column:updated_by;type:uuid"`
 }
 
 func (OrganizationModel) TableName() string { return "organizations" }
