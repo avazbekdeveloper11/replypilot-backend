@@ -130,6 +130,25 @@ type Sender interface {
 	SendMessage(ctx context.Context, accessToken, recipientIGID, text string) error
 }
 
+// PrivateReplySender is the port onto Meta's private-reply send —
+// satisfied by internal/integration/metaapi.Client.SendPrivateReply.
+// Separate from Sender because it's only ever correct for the FIRST
+// message to someone who reached us by commenting: the message must be
+// addressed to the comment id, and Meta allows exactly one per comment.
+// See that method's doc comment, and instagram.MetadataKeyPrivateReplyCommentID
+// for how HandleInboundMessage knows which case it's in.
+type PrivateReplySender interface {
+	SendPrivateReply(ctx context.Context, accessToken, commentID, text string) error
+}
+
+// metadataKeyPrivateReplyCommentID mirrors
+// instagram.MetadataKeyPrivateReplyCommentID's value. Duplicated as an
+// unexported const rather than imported for the same "usecases don't
+// depend on each other" reason as Sender/TelegramSender being declared
+// per-package — the two are a documented pair; changing one without the
+// other breaks comment-to-DM silently, so both carry a cross-reference.
+const metadataKeyPrivateReplyCommentID = "private_reply_comment_id"
+
 // TelegramSender is Sender's Telegram-channel counterpart — satisfied by
 // internal/integration/telegramapi.Client.SendMessage. Kept as its own
 // interface rather than folded into Sender: the two APIs need different
@@ -208,6 +227,7 @@ type UseCase struct {
 	media            MediaFetcher
 	telegramAccounts TelegramAccountLookup
 	telegramSender   TelegramSender
+	privateReply     PrivateReplySender
 }
 
 func New(
@@ -226,6 +246,7 @@ func New(
 	media MediaFetcher,
 	telegramAccounts TelegramAccountLookup,
 	telegramSender TelegramSender,
+	privateReply PrivateReplySender,
 ) *UseCase {
 	return &UseCase{
 		convRepo:         convRepo,
@@ -243,6 +264,7 @@ func New(
 		media:            media,
 		telegramAccounts: telegramAccounts,
 		telegramSender:   telegramSender,
+		privateReply:     privateReply,
 	}
 }
 
@@ -392,6 +414,21 @@ func (uc *UseCase) HandleInboundMessage(ctx context.Context, ev InboundEvent) er
 		accessToken, err := uc.encryptor.Decrypt(account.AccessTokenEncrypted)
 		if err != nil {
 			return apperror.Internal("decrypt instagram access token", err)
+		}
+
+		// A message that arrived as a public comment (comment-to-DM
+		// automation) has no DM thread yet, so the reply has to be sent as
+		// a private reply addressed to the comment — see
+		// PrivateReplySender's doc comment. Every subsequent message in the
+		// same conversation is an ordinary DM, which is exactly what
+		// happens here: only the ingested comment carries this metadata,
+		// so the next turn falls through to SendMessage below.
+		if commentID := privateReplyCommentID(latest); commentID != "" && uc.privateReply != nil {
+			if err := uc.privateReply.SendPrivateReply(ctx, accessToken, commentID, replyText); err != nil {
+				uc.handleSendFailure(ctx, account, err)
+				return apperror.Internal("send instagram private reply", err)
+			}
+			break
 		}
 
 		if err := uc.sender.SendMessage(ctx, accessToken, conv.CustomerIGID, replyText); err != nil {
@@ -906,6 +943,22 @@ func stripMarkdownEmphasis(text string) string {
 		}
 		return match
 	})
+}
+
+// privateReplyCommentID reads the comment id an ingested Instagram comment
+// carries in its metadata (written by instagram.WebhookUseCase.handleComment
+// — see metadataKeyPrivateReplyCommentID). Returns "" for an ordinary DM,
+// which is every message except the one that started a comment-to-DM
+// conversation.
+func privateReplyCommentID(latest *entity.Message) string {
+	if latest == nil || latest.Metadata == nil {
+		return ""
+	}
+	id, ok := latest.Metadata[metadataKeyPrivateReplyCommentID].(string)
+	if !ok {
+		return ""
+	}
+	return id
 }
 
 func derefOr(s *string, fallback string) string {

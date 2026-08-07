@@ -44,6 +44,7 @@ import (
 	analyticsuc "github.com/replypilot/backend/internal/usecase/analytics"
 	billinguc "github.com/replypilot/backend/internal/usecase/billing"
 	clickuc "github.com/replypilot/backend/internal/usecase/click"
+	commentautomationuc "github.com/replypilot/backend/internal/usecase/commentautomation"
 	dashboarduc "github.com/replypilot/backend/internal/usecase/dashboard"
 	insightsuc "github.com/replypilot/backend/internal/usecase/insights"
 	instagramuc "github.com/replypilot/backend/internal/usecase/instagram"
@@ -137,6 +138,7 @@ func New(cfg *config.Config) (*Container, error) {
 	telegramAccountRepo := postgresrepo.NewTelegramAccountRepository(db)
 	orderRepo := postgresrepo.NewOrderRepository(db)
 	aiInsightsRepo := postgresrepo.NewAIInsightsRepository(db)
+	commentAutomationRepo := postgresrepo.NewCommentAutomationRepository(db)
 	refreshTokenStore := redisrepo.NewRefreshTokenStore(redisClient)
 	oauthStateStore := redisrepo.NewOAuthStateStore(redisClient)
 	otpStore := redisrepo.NewOTPStore(redisClient)
@@ -163,7 +165,10 @@ func New(cfg *config.Config) (*Container, error) {
 	authUseCase := authuc.New(orgRepo, userRepo, roleRepo, teamMemberRepo, tokens, refreshTokenStore, otpStore, emailNotifier)
 	orgUseCase := organizationuc.New(orgRepo)
 	oauthUseCase := instagramuc.NewOAuthUseCase(instagramAccountRepo, graphClient, oauthStateStore, encryptor, cfg.Meta.AppID, cfg.Meta.RedirectURL)
-	webhookUseCase := instagramuc.NewWebhookUseCase(webhookLogRepo, instagramAccountRepo, conversationRepo, messageRepo, publisher, graphClient, encryptor, cfg.Meta.AppSecret, cfg.Meta.WebhookVerifyToken, logger)
+	// graphClient is passed twice here — once as ProfileFetcher, once as
+	// CommentReplier (comment-to-DM automation). Same "one concrete
+	// instance, several narrow ports" pattern used throughout this file.
+	webhookUseCase := instagramuc.NewWebhookUseCase(webhookLogRepo, instagramAccountRepo, conversationRepo, messageRepo, publisher, graphClient, commentAutomationRepo, graphClient, encryptor, cfg.Meta.AppSecret, cfg.Meta.WebhookVerifyToken, logger)
 	telegramConnectUseCase := telegramuc.NewConnectUseCase(telegramAccountRepo, telegramClient, encryptor, cfg.Telegram.WebhookBaseURL, cfg.Telegram.WebhookSecret)
 	telegramWebhookUseCase := telegramuc.NewWebhookUseCase(webhookLogRepo, telegramAccountRepo, conversationRepo, messageRepo, publisher, telegramClient, encryptor, cfg.Telegram.WebhookSecret, logger)
 	// geminiClient is passed once more here as conversationuc.Generator —
@@ -191,28 +196,30 @@ func New(cfg *config.Config) (*Container, error) {
 	// "one concrete instance, another narrow port" pattern as
 	// conversationUseCase above.
 	insightsUseCase := insightsuc.New(aiInsightsRepo, orderRepo, leadRepo, dashboardRepo, messageRepo, geminiClient)
+	commentAutomationUseCase := commentautomationuc.New(commentAutomationRepo)
 
 	// --- handlers ---
 	handlers := httpserver.Handlers{
-		Auth:         v1.NewAuthHandler(authUseCase),
-		Organization: v1.NewOrganizationHandler(orgUseCase),
-		Instagram:    v1.NewInstagramHandler(oauthUseCase),
-		Telegram:     v1.NewTelegramHandler(telegramConnectUseCase),
-		Webhook:      v1.NewWebhookHandler(webhookUseCase),
-		TelegramWebhook: v1.NewTelegramWebhookHandler(telegramWebhookUseCase),
-		ClickWebhook: v1.NewClickWebhookHandler(paymentWebhookUseCase),
-		Conversation: v1.NewConversationHandler(conversationUseCase),
-		Dashboard:    v1.NewDashboardHandler(dashboardUseCase),
-		Team:         v1.NewTeamHandler(teamUseCase),
-		Knowledge:    v1.NewKnowledgeHandler(knowledgeUseCase),
-		Billing:      v1.NewBillingHandler(billingUseCase),
-		Analytics:    v1.NewAnalyticsHandler(analyticsUseCase),
-		User:         v1.NewUserHandler(userUseCase),
-		Admin:        v1.NewAdminHandler(adminUseCase, platformSettingsUseCase),
-		Product:      v1.NewProductHandler(productUseCase),
-		Click:        v1.NewClickHandler(clickUseCase),
-		Lead:         v1.NewLeadHandler(leadUseCase),
-		Insights:     v1.NewInsightsHandler(insightsUseCase),
+		Auth:              v1.NewAuthHandler(authUseCase),
+		Organization:      v1.NewOrganizationHandler(orgUseCase),
+		Instagram:         v1.NewInstagramHandler(oauthUseCase),
+		Telegram:          v1.NewTelegramHandler(telegramConnectUseCase),
+		Webhook:           v1.NewWebhookHandler(webhookUseCase),
+		TelegramWebhook:   v1.NewTelegramWebhookHandler(telegramWebhookUseCase),
+		ClickWebhook:      v1.NewClickWebhookHandler(paymentWebhookUseCase),
+		Conversation:      v1.NewConversationHandler(conversationUseCase),
+		Dashboard:         v1.NewDashboardHandler(dashboardUseCase),
+		Team:              v1.NewTeamHandler(teamUseCase),
+		Knowledge:         v1.NewKnowledgeHandler(knowledgeUseCase),
+		Billing:           v1.NewBillingHandler(billingUseCase),
+		Analytics:         v1.NewAnalyticsHandler(analyticsUseCase),
+		User:              v1.NewUserHandler(userUseCase),
+		Admin:             v1.NewAdminHandler(adminUseCase, platformSettingsUseCase),
+		Product:           v1.NewProductHandler(productUseCase),
+		Click:             v1.NewClickHandler(clickUseCase),
+		Lead:              v1.NewLeadHandler(leadUseCase),
+		Insights:          v1.NewInsightsHandler(insightsUseCase),
+		CommentAutomation: v1.NewCommentAutomationHandler(commentAutomationUseCase),
 	}
 
 	// --- middlewares ---

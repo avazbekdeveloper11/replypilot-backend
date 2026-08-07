@@ -121,7 +121,10 @@ func run() error {
 	// aiuc.TelegramAccountLookup and aiuc.TelegramSender — the same
 	// pattern as geminiClient/metaClient above, one concrete instance
 	// satisfying two narrow interfaces.
-	aiUseCase := aiuc.New(convRepo, msgRepo, accountRepo, aiRespRepo, knowledgeUseCase, geminiClient, metaClient, encryptor, productRepo, clickIntegrationRepo, leadRepo, geminiClient, metaClient, telegramAccountRepo, telegramClient)
+	// metaClient appears a third time as aiuc.PrivateReplySender, for the
+	// first reply to someone who reached us via a post comment
+	// (comment-to-DM automation) — see that interface's doc comment.
+	aiUseCase := aiuc.New(convRepo, msgRepo, accountRepo, aiRespRepo, knowledgeUseCase, geminiClient, metaClient, encryptor, productRepo, clickIntegrationRepo, leadRepo, geminiClient, metaClient, telegramAccountRepo, telegramClient, metaClient)
 	platformSettingsUseCase := platformsettingsuc.New(platformSettingsRepo, encryptor)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

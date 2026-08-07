@@ -352,6 +352,29 @@ type AIInsightsCacheModel struct {
 
 func (AIInsightsCacheModel) TableName() string { return "ai_insights_cache" }
 
+// CommentAutomationSettingsModel maps to comment_automation_settings — see
+// entity.CommentAutomationSettings' doc comment.
+type CommentAutomationSettingsModel struct {
+	OrganizationID  uuid.UUID `gorm:"column:organization_id;type:uuid;primaryKey"`
+	Enabled         bool      `gorm:"column:enabled"`
+	PublicReplyText *string   `gorm:"column:public_reply_text"`
+	CreatedAt       time.Time `gorm:"column:created_at"`
+	UpdatedAt       time.Time `gorm:"column:updated_at"`
+}
+
+func (CommentAutomationSettingsModel) TableName() string { return "comment_automation_settings" }
+
+// ProcessedCommentModel maps to processed_comments — the idempotency guard
+// around Meta's one-private-reply-per-comment rule.
+type ProcessedCommentModel struct {
+	ID             uuid.UUID `gorm:"column:id;type:uuid;primaryKey"`
+	OrganizationID uuid.UUID `gorm:"column:organization_id;type:uuid"`
+	IGCommentID    string    `gorm:"column:ig_comment_id"`
+	CreatedAt      time.Time `gorm:"column:created_at"`
+}
+
+func (ProcessedCommentModel) TableName() string { return "processed_comments" }
+
 // LeadModel maps to dm_leads, not leads: migration 000001 already owns an
 // unrelated "leads" table (dead CRM-style schema, no Go code behind it) —
 // see 000013_leads.up.sql's doc comment for the full story.

@@ -53,7 +53,14 @@ type GraphAPIClient interface {
 // failure isn't fatal to persistence, so the account still saves as
 // "connected" with webhook_subscribed=false — DMs got ingested nowhere,
 // and it looked exactly like "AI just isn't replying").
-const webhookFields = "messages,messaging_seen,message_reactions,messaging_postbacks"
+// `comments` was added for comment-to-DM automation (see
+// WebhookUseCase.handleComment). Subscribed for every account regardless of
+// whether that org has the feature turned on: the subscription is set once
+// at connect time, but the feature is toggled any time afterwards, and a
+// comment event for a disabled org is discarded in one cheap settings
+// lookup. The alternative — re-subscribing on every settings change — adds
+// a Graph API call that can fail on a path where nothing else can.
+const webhookFields = "messages,messaging_seen,message_reactions,messaging_postbacks,comments"
 
 // StateStore persists the OAuth CSRF `state` between connect and callback.
 // Implemented by internal/repository/redis.OAuthStateStore.

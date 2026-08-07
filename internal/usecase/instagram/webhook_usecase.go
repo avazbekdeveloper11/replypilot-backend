@@ -36,6 +36,25 @@ type ProfileFetcher interface {
 	FetchCustomerUsername(ctx context.Context, accessToken, igUserID string) (username string, err error)
 }
 
+// CommentReplier is the narrow port onto the two Meta calls comment-to-DM
+// automation needs — satisfied by internal/integration/metaapi.Client. See
+// that package's SendPrivateReply doc comment for the one-per-comment and
+// first-message-only rules these have to respect.
+type CommentReplier interface {
+	SendPrivateReply(ctx context.Context, accessToken, commentID, text string) error
+	ReplyToComment(ctx context.Context, accessToken, commentID, text string) error
+}
+
+// MetadataKeyPrivateReplyCommentID marks an ingested comment as needing
+// its first outbound message sent as a private reply addressed to this
+// comment id, rather than an ordinary DM to the customer's IGSID. Read by
+// internal/usecase/ai when it picks the send path — see
+// metaapi.Client.SendPrivateReply's doc comment for why the first message
+// is special. Exported because that package reads the same key; it is the
+// contract between the two, so it lives here (where it's written) rather
+// than being duplicated as a private const on both sides.
+const MetadataKeyPrivateReplyCommentID = "private_reply_comment_id"
+
 // RoutingKeyDMReceived is the event a downstream AI-processing worker
 // (cmd/worker-ai in the full system — not part of this API service)
 // consumes to pick up the next step of the pipeline described in
@@ -52,16 +71,18 @@ type DMReceivedEvent struct {
 }
 
 type WebhookUseCase struct {
-	logRepo     repository.WebhookLogRepository
-	accountRepo repository.InstagramAccountRepository
-	convRepo    repository.ConversationRepository
-	messageRepo repository.MessageRepository
-	publisher   EventPublisher
-	profiles    ProfileFetcher
-	encryptor   *crypto.AESGCMEncryptor
-	appSecret   string
-	verifyToken string
-	logger      *zap.Logger
+	logRepo      repository.WebhookLogRepository
+	accountRepo  repository.InstagramAccountRepository
+	convRepo     repository.ConversationRepository
+	messageRepo  repository.MessageRepository
+	publisher    EventPublisher
+	profiles     ProfileFetcher
+	comments     repository.CommentAutomationRepository
+	commentReply CommentReplier
+	encryptor    *crypto.AESGCMEncryptor
+	appSecret    string
+	verifyToken  string
+	logger       *zap.Logger
 }
 
 func NewWebhookUseCase(
@@ -71,22 +92,26 @@ func NewWebhookUseCase(
 	messageRepo repository.MessageRepository,
 	publisher EventPublisher,
 	profiles ProfileFetcher,
+	comments repository.CommentAutomationRepository,
+	commentReply CommentReplier,
 	encryptor *crypto.AESGCMEncryptor,
 	appSecret string,
 	verifyToken string,
 	logger *zap.Logger,
 ) *WebhookUseCase {
 	return &WebhookUseCase{
-		logRepo:     logRepo,
-		accountRepo: accountRepo,
-		convRepo:    convRepo,
-		messageRepo: messageRepo,
-		publisher:   publisher,
-		profiles:    profiles,
-		encryptor:   encryptor,
-		appSecret:   appSecret,
-		verifyToken: verifyToken,
-		logger:      logger,
+		logRepo:      logRepo,
+		accountRepo:  accountRepo,
+		convRepo:     convRepo,
+		messageRepo:  messageRepo,
+		publisher:    publisher,
+		profiles:     profiles,
+		comments:     comments,
+		commentReply: commentReply,
+		encryptor:    encryptor,
+		appSecret:    appSecret,
+		verifyToken:  verifyToken,
+		logger:       logger,
 	}
 }
 
@@ -113,6 +138,35 @@ type webhookEntry struct {
 	ID        string             `json:"id"` // the Instagram business account this delivery is for
 	Time      int64              `json:"time"`
 	Messaging []webhookMessaging `json:"messaging"`
+	// Changes carries non-messaging events — currently only `comments`,
+	// for comment-to-DM automation (see handleComment). Meta delivers
+	// these on the same webhook endpoint as messaging, distinguished only
+	// by which array is populated.
+	Changes []webhookChange `json:"changes,omitempty"`
+}
+
+// webhookChange mirrors Meta's entry.changes[] shape for the `comments`
+// field: https://developers.facebook.com/docs/instagram-platform/webhooks
+type webhookChange struct {
+	Field string             `json:"field"`
+	Value webhookChangeValue `json:"value"`
+}
+
+type webhookChangeValue struct {
+	ID   string `json:"id"`   // the comment's own id
+	Text string `json:"text"` // the comment text
+	From struct {
+		ID       string `json:"id"`
+		Username string `json:"username"`
+	} `json:"from"`
+	Media struct {
+		ID string `json:"id"`
+	} `json:"media"`
+	// ParentID is set when this comment is itself a reply to another
+	// comment. Replies are skipped (see handleComment) — auto-DMing
+	// someone for replying inside a thread, including a thread the
+	// business itself started, is not what "comment on my post" means.
+	ParentID string `json:"parent_id,omitempty"`
 }
 
 type webhookMessaging struct {
@@ -207,6 +261,14 @@ func (uc *WebhookUseCase) Process(ctx context.Context, signatureHeader string, r
 				continue // our own outbound message, echoed back by Meta — not a customer message
 			}
 			if err := uc.ingestMessage(ctx, entry.ID, m); err != nil {
+				processErr = err
+			}
+		}
+		for _, ch := range entry.Changes {
+			if ch.Field != "comments" {
+				continue
+			}
+			if err := uc.handleComment(ctx, entry.ID, ch.Value); err != nil {
 				processErr = err
 			}
 		}
@@ -327,6 +389,212 @@ func (uc *WebhookUseCase) ingestMessage(ctx context.Context, igBusinessAccountID
 		MessageID:          msg.ID.String(),
 		InstagramAccountID: account.ID.String(),
 	})
+}
+
+// handleComment turns a comment on one of the org's posts into a DM
+// conversation: it claims the comment (idempotency — see below), records
+// it as an inbound message so the thread reads naturally in the inbox, and
+// publishes dm.received so the normal AI pipeline generates and sends the
+// actual reply. The AI's reply goes out as a Meta "private reply"
+// addressed to the comment rather than an ordinary DM, which is what
+// opens the thread in the first place — see MetadataKeyPrivateReplyCommentID.
+//
+// Everything here is a no-op-and-return-nil rather than an error for
+// conditions that are expected and not this system's problem (feature
+// disabled, someone else's account, a reply-to-a-reply, the business
+// commenting on its own post). Only genuine infrastructure failures
+// propagate, since a returned error marks the whole webhook delivery
+// failed in webhook_logs.
+func (uc *WebhookUseCase) handleComment(ctx context.Context, igBusinessAccountID string, v webhookChangeValue) (err error) {
+	if uc.comments == nil || uc.commentReply == nil {
+		return nil // comment automation not wired in this process
+	}
+	if v.ID == "" || v.From.ID == "" {
+		return nil
+	}
+	if v.ParentID != "" {
+		return nil // a reply inside a comment thread, not a top-level comment
+	}
+
+	account, err := uc.accountRepo.FindByIGUserID(ctx, igBusinessAccountID)
+	if err != nil {
+		if ae, ok := apperror.As(err); ok && ae.Code == apperror.CodeNotFound {
+			return nil // not one of our tenants' accounts
+		}
+		return err
+	}
+
+	// The business's own comments/replies on its own post come through this
+	// same webhook. Auto-DMing yourself is both useless and, because a
+	// private reply can only ever be sent once per comment, wasteful.
+	if v.From.ID == igBusinessAccountID {
+		return nil
+	}
+
+	settings, err := uc.comments.Get(ctx, account.OrganizationID)
+	if err != nil {
+		if ae, ok := apperror.As(err); ok && ae.Code == apperror.CodeNotFound {
+			return nil // never configured => disabled, see entity doc comment
+		}
+		return err
+	}
+	if !settings.Enabled {
+		return nil
+	}
+
+	// Claim BEFORE doing anything with side effects. Meta redelivers
+	// webhooks, and a second private reply for the same comment is a hard
+	// API error — the unique index behind this call is what makes two
+	// concurrent redeliveries safe (see the repository's doc comment).
+	claim := &entity.ProcessedComment{
+		OrganizationID: account.OrganizationID,
+		IGCommentID:    v.ID,
+	}
+	claimed, err := uc.comments.ClaimComment(ctx, claim)
+	if err != nil {
+		return err
+	}
+	if !claimed {
+		return nil // already handled on an earlier delivery
+	}
+
+	// Every failure from here on must release the claim, or a single
+	// transient failure permanently suppresses the reply for this comment:
+	// the claim would survive, so Meta's redelivery hits the
+	// already-claimed branch above and silently does nothing. Named return
+	// + defer rather than a release call on each path, because the last
+	// one (Publish) is both the easiest to forget and the most costly to
+	// get wrong — it's what actually causes the reply to be generated.
+	//
+	// context.WithoutCancel, not ctx: the most likely reason the work
+	// above failed is that ctx was cancelled or timed out, and releasing
+	// on a dead context would fail too — leaking exactly the claim this
+	// defer exists to clean up. The release itself is also logged rather
+	// than fully discarded, since a silent failure here is invisible until
+	// someone wonders why one comment never got a reply.
+	defer func() {
+		if err == nil {
+			return
+		}
+		if relErr := uc.comments.ReleaseComment(context.WithoutCancel(ctx), account.OrganizationID, v.ID); relErr != nil {
+			uc.logger.Warn("comment automation: releasing claim after failure failed — this comment will not be retried",
+				zap.String("ig_comment_id", v.ID), zap.Error(relErr))
+		}
+	}()
+
+	conv, err := uc.commentConversation(ctx, account, v)
+	if err != nil {
+		return err
+	}
+
+	// Stored as a normal inbound customer message so the AI pipeline needs
+	// no special case to read it, and the inbox thread reads in the right
+	// order. The bracket prefix is what tells the AI (via buildTranscript)
+	// that this arrived as a public comment rather than a DM, which
+	// meaningfully changes an appropriate reply.
+	content := "[Izoh] " + v.Text
+	if v.Text == "" {
+		content = "[Izoh]"
+	}
+	commentMessageID := "ig_comment:" + v.ID
+	msg := &entity.Message{
+		OrganizationID: account.OrganizationID,
+		ConversationID: conv.ID,
+		Direction:      entity.MessageDirectionInbound,
+		SenderType:     entity.MessageSenderCustomer,
+		MessageType:    entity.MessageTypeText,
+		Content:        &content,
+		IGMessageID:    &commentMessageID,
+		Metadata:       map[string]any{MetadataKeyPrivateReplyCommentID: v.ID},
+		CreatedAt:      time.Now(),
+	}
+	// Plain `=`, not `:=`, from here down: `if err := ...` would declare a
+	// NEW err scoped to the if-statement, leaving the named return nil —
+	// and the claim-releasing defer above checks the named return, so a
+	// shadowed error would silently skip the release it exists to
+	// guarantee.
+	if err = uc.messageRepo.Create(ctx, msg); err != nil {
+		return err
+	}
+
+	preview := previewFor(msg)
+	now := msg.CreatedAt
+	conv.LastMessageAt = &now
+	conv.LastMessagePreview = &preview
+	conv.UnreadCount++
+	if err = uc.convRepo.Update(ctx, conv); err != nil {
+		return err
+	}
+
+	// Optional public reply under the comment. Best-effort: this is a
+	// nice-to-have that must not block the DM, which is the part that
+	// actually converts. Logged, not returned.
+	if settings.PublicReplyText != nil && *settings.PublicReplyText != "" {
+		if accessToken, decErr := uc.encryptor.Decrypt(account.AccessTokenEncrypted); decErr != nil {
+			uc.logger.Warn("comment automation: decrypt access token for public reply failed",
+				zap.String("instagram_account_id", account.ID.String()), zap.Error(decErr))
+		} else if replyErr := uc.commentReply.ReplyToComment(ctx, accessToken, v.ID, *settings.PublicReplyText); replyErr != nil {
+			uc.logger.Warn("comment automation: public reply failed",
+				zap.String("ig_comment_id", v.ID), zap.Error(replyErr))
+		}
+	}
+
+	// Assigned to the named return rather than returned directly, so the
+	// claim-releasing defer above sees a Publish failure — that's the path
+	// where a swallowed error costs an actual customer reply, since
+	// nothing downstream would ever generate one.
+	err = uc.publisher.Publish(ctx, RoutingKeyDMReceived, DMReceivedEvent{
+		OrganizationID:     account.OrganizationID.String(),
+		ConversationID:     conv.ID.String(),
+		MessageID:          msg.ID.String(),
+		InstagramAccountID: account.ID.String(),
+	})
+	return err
+}
+
+// commentConversation finds or creates the conversation to attach a
+// commenter to.
+//
+// KNOWN ASSUMPTION, worth understanding before debugging odd behavior:
+// this keys on the commenter's id from the comments webhook
+// (value.from.id) as CustomerIGID, the same field a DM's sender IGSID goes
+// in. Meta documents both as app-scoped ids for the same user, so a
+// customer who comments and later DMs should land in one thread — but that
+// equivalence is not something this codebase can verify without live
+// traffic across both surfaces. If it turns out they differ, the visible
+// symptom is a duplicate conversation per customer (one from comments, one
+// from DMs), not lost messages or a crash.
+func (uc *WebhookUseCase) commentConversation(ctx context.Context, account *entity.InstagramAccount, v webhookChangeValue) (*entity.Conversation, error) {
+	conv, err := uc.convRepo.FindByAccountAndCustomer(ctx, account.OrganizationID, account.ID, v.From.ID)
+	if err == nil {
+		if conv.CustomerUsername == nil && v.From.Username != "" {
+			username := v.From.Username
+			conv.CustomerUsername = &username
+		}
+		return conv, nil
+	}
+	if ae, ok := apperror.As(err); !ok || ae.Code != apperror.CodeNotFound {
+		return nil, err
+	}
+
+	conv = &entity.Conversation{
+		OrganizationID:     account.OrganizationID,
+		Channel:            entity.ConversationChannelInstagram,
+		InstagramAccountID: account.ID,
+		CustomerIGID:       v.From.ID,
+		Status:             entity.ConversationStatusAIActive,
+	}
+	// Unlike the DM path (see ingestMessage's ProfileFetcher block), the
+	// comments webhook carries the username directly — no extra Graph API
+	// call needed.
+	if v.From.Username != "" {
+		username := v.From.Username
+		conv.CustomerUsername = &username
+	}
+	if err := uc.convRepo.Create(ctx, conv); err != nil {
+		return nil, err
+	}
+	return conv, nil
 }
 
 // classifyAttachment inspects the first attachment (see webhookAttachment's

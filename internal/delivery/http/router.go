@@ -18,25 +18,26 @@ import (
 // in internal/di and passed in — this file owns routing, not object
 // construction.
 type Handlers struct {
-	Auth         *v1.AuthHandler
-	Organization *v1.OrganizationHandler
-	Instagram    *v1.InstagramHandler
-	Telegram     *v1.TelegramHandler
-	Webhook      *v1.WebhookHandler
-	TelegramWebhook *v1.TelegramWebhookHandler
-	ClickWebhook *v1.ClickWebhookHandler
-	Conversation *v1.ConversationHandler
-	Dashboard    *v1.DashboardHandler
-	Team         *v1.TeamHandler
-	Knowledge    *v1.KnowledgeHandler
-	Billing      *v1.BillingHandler
-	Analytics    *v1.AnalyticsHandler
-	User         *v1.UserHandler
-	Admin        *v1.AdminHandler
-	Product      *v1.ProductHandler
-	Click        *v1.ClickHandler
-	Lead         *v1.LeadHandler
-	Insights     *v1.InsightsHandler
+	Auth              *v1.AuthHandler
+	Organization      *v1.OrganizationHandler
+	Instagram         *v1.InstagramHandler
+	Telegram          *v1.TelegramHandler
+	Webhook           *v1.WebhookHandler
+	TelegramWebhook   *v1.TelegramWebhookHandler
+	ClickWebhook      *v1.ClickWebhookHandler
+	Conversation      *v1.ConversationHandler
+	Dashboard         *v1.DashboardHandler
+	Team              *v1.TeamHandler
+	Knowledge         *v1.KnowledgeHandler
+	Billing           *v1.BillingHandler
+	Analytics         *v1.AnalyticsHandler
+	User              *v1.UserHandler
+	Admin             *v1.AdminHandler
+	Product           *v1.ProductHandler
+	Click             *v1.ClickHandler
+	Lead              *v1.LeadHandler
+	Insights          *v1.InsightsHandler
+	CommentAutomation *v1.CommentAutomationHandler
 }
 
 // Middlewares bundles the gin.HandlerFuncs that need constructed
@@ -183,6 +184,9 @@ func NewRouter(h Handlers, mw Middlewares) *gin.Engine {
 			protected.GET("/integrations/click", h.Click.Get)
 			protected.POST("/integrations/click/connect", h.Click.Connect)
 			protected.POST("/integrations/click/disconnect", h.Click.Disconnect)
+
+			protected.GET("/integrations/comment-automation", h.CommentAutomation.Get)
+			protected.PUT("/integrations/comment-automation", h.CommentAutomation.Update)
 
 			protected.GET("/leads", h.Lead.List)
 			protected.PATCH("/leads/:id", h.Lead.UpdateStatus)

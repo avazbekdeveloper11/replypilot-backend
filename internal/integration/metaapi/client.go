@@ -312,6 +312,98 @@ func (c *Client) SendMessage(ctx context.Context, accessToken, recipientIGID, te
 	return nil
 }
 
+// privateReplyRequest differs from sendMessageRequest in exactly one way:
+// the recipient is addressed by COMMENT id rather than user id. Meta
+// treats that as a distinct "private reply" operation with its own rules
+// (see SendPrivateReply), so this is a separate request type rather than
+// an optional field on the existing one — a caller can't accidentally
+// build a half-populated recipient with both or neither set.
+type privateReplyRequest struct {
+	Recipient privateReplyRecipient `json:"recipient"`
+	Message   sendMessageBody       `json:"message"`
+}
+
+type privateReplyRecipient struct {
+	CommentID string `json:"comment_id"`
+}
+
+// SendPrivateReply opens a DM thread with the author of an Instagram
+// comment — Meta's "private reply" mechanism, the API behind every
+// "comment below and I'll DM you" post. Same endpoint as SendMessage
+// (POST {graphBase}/me/messages) but addressed to a comment id.
+//
+// Two rules this codebase has to respect, both enforced by Meta, not by
+// convention:
+//
+//  1. ONE private reply per comment, ever. A second attempt is a hard API
+//     error. internal/usecase/instagram guards this with the
+//     processed_comments unique index (see migration 000017) rather than
+//     relying on catching the error after the fact.
+//  2. Only the FIRST message to that customer can go this way. Once the
+//     thread exists, every subsequent message is an ordinary SendMessage
+//     to the customer's IGSID. internal/usecase/ai handles that switch by
+//     checking the inbound message's metadata for a comment id.
+//
+// Meta also applies its own 7-day window for sending a private reply after
+// the comment was posted; a stale comment (e.g. a redelivered webhook for
+// something old) fails here rather than being silently dropped.
+func (c *Client) SendPrivateReply(ctx context.Context, accessToken, commentID, text string) error {
+	reqBody, err := json.Marshal(privateReplyRequest{
+		Recipient: privateReplyRecipient{CommentID: commentID},
+		Message:   sendMessageBody{Text: text},
+	})
+	if err != nil {
+		return err
+	}
+
+	u := fmt.Sprintf("%s/me/messages?access_token=%s", c.graphBase, url.QueryEscape(accessToken))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(reqBody))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	var result sendMessageResponse
+	if err := c.doJSON(req, &result); err != nil {
+		return err
+	}
+	if result.MessageID == "" {
+		return fmt.Errorf("meta private reply: no message_id in response")
+	}
+	return nil
+}
+
+type commentReplyResponse struct {
+	ID string `json:"id"`
+}
+
+// ReplyToComment posts a PUBLIC reply underneath an Instagram comment via
+// POST {graphBase}/{comment-id}/replies. Unlike SendPrivateReply this is
+// visible to everyone and permanent, which is why the text it sends is a
+// fixed string the org wrote themselves rather than anything AI-generated
+// — see comment_automation_settings.public_reply_text's column comment in
+// migration 000017.
+func (c *Client) ReplyToComment(ctx context.Context, accessToken, commentID, text string) error {
+	u := fmt.Sprintf(
+		"%s/%s/replies?message=%s&access_token=%s",
+		c.graphBase, commentID, url.QueryEscape(text), url.QueryEscape(accessToken),
+	)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, nil)
+	if err != nil {
+		return err
+	}
+
+	var result commentReplyResponse
+	if err := c.doJSON(req, &result); err != nil {
+		return err
+	}
+	if result.ID == "" {
+		return fmt.Errorf("meta comment reply: no id in response")
+	}
+	return nil
+}
+
 // maxAttachmentBytes caps DownloadAttachment's response size. Gemini's
 // generateContent request body has its own ~20MB overall limit for inline
 // (non-Files-API) data, and a base64-encoded image is ~1.33x its raw

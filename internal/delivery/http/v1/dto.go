@@ -220,6 +220,21 @@ type AIInsightsResponse struct {
 	GeneratedAt       string `json:"generated_at"`
 }
 
+// CommentAutomationResponse mirrors entity.CommentAutomationSettings.
+// PublicReplyText is omitted entirely when unset — "private reply only",
+// see that entity's doc comment.
+type CommentAutomationResponse struct {
+	Enabled         bool    `json:"enabled"`
+	PublicReplyText *string `json:"public_reply_text,omitempty"`
+}
+
+type UpdateCommentAutomationRequest struct {
+	// No `binding:"required"` on Enabled — a required bool rejects `false`,
+	// which is the exact value someone turning the feature OFF sends.
+	Enabled         bool    `json:"enabled"`
+	PublicReplyText *string `json:"public_reply_text"`
+}
+
 type ConnectClickRequest struct {
 	MerchantID     string  `json:"merchant_id" binding:"required"`
 	ServiceID      string  `json:"service_id" binding:"required"`
