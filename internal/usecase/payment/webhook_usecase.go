@@ -52,6 +52,17 @@ type TelegramAccountLookup interface {
 	FindByID(ctx context.Context, orgID, id uuid.UUID) (*entity.TelegramAccount, error)
 }
 
+// Notifier is the narrow port onto admin-facing Telegram notifications —
+// satisfied by telegram.NotifyUseCase.NotifyPayment. Declared separately
+// per this package's "usecases don't depend on each other" convention (see
+// Sender's doc comment above) even though internal/usecase/ai declares an
+// identically-shaped Notifier for NotifyLead — one concrete
+// *telegram.NotifyUseCase instance satisfies both. May be nil; notifyPaid
+// nil-checks before calling.
+type Notifier interface {
+	NotifyPayment(ctx context.Context, orgID uuid.UUID, productName, amountSom string)
+}
+
 type WebhookUseCase struct {
 	clickIntegrations ClickIntegrationLookup
 	orders            repository.OrderRepository
@@ -62,6 +73,7 @@ type WebhookUseCase struct {
 	sender            Sender
 	telegramAccounts  TelegramAccountLookup
 	telegramSender    TelegramSender
+	notifier          Notifier
 	encryptor         *crypto.AESGCMEncryptor
 	logger            *zap.Logger
 }
@@ -76,6 +88,7 @@ func New(
 	sender Sender,
 	telegramAccounts TelegramAccountLookup,
 	telegramSender TelegramSender,
+	notifier Notifier,
 	encryptor *crypto.AESGCMEncryptor,
 	logger *zap.Logger,
 ) *WebhookUseCase {
@@ -89,6 +102,7 @@ func New(
 		sender:            sender,
 		telegramAccounts:  telegramAccounts,
 		telegramSender:    telegramSender,
+		notifier:          notifier,
 		encryptor:         encryptor,
 		logger:            logger,
 	}
@@ -365,6 +379,10 @@ func (uc *WebhookUseCase) notifyPaid(ctx context.Context, orgID uuid.UUID, order
 	if err := uc.recordMessage(ctx, orgID, conv, entity.MessageSenderSystem, adminNote, metadata); err != nil {
 		uc.logger.Warn("click webhook: persist admin system message failed",
 			zap.String("order_id", order.ID.String()), zap.Error(err))
+	}
+
+	if uc.notifier != nil {
+		uc.notifier.NotifyPayment(ctx, orgID, order.ProductNameSnapshot, amountText)
 	}
 }
 

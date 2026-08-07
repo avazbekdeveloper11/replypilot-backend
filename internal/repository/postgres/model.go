@@ -110,6 +110,10 @@ type TelegramAccountModel struct {
 	BusinessConnectionID *string        `gorm:"column:business_connection_id"`
 	Status               string         `gorm:"column:status"`
 	ConnectedByUserID    *uuid.UUID     `gorm:"column:connected_by_user_id;type:uuid"`
+	NotifyChatID         *int64         `gorm:"column:notify_chat_id"`
+	NotifyVerifyCode     *string        `gorm:"column:notify_verify_code"`
+	NotifyOnLead         bool           `gorm:"column:notify_on_lead"`
+	NotifyOnPayment      bool           `gorm:"column:notify_on_payment"`
 	CreatedAt            time.Time      `gorm:"column:created_at"`
 	UpdatedAt            time.Time      `gorm:"column:updated_at"`
 	DeletedAt            gorm.DeletedAt `gorm:"column:deleted_at;index"`

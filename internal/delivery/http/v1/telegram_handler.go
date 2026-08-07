@@ -116,11 +116,81 @@ func (h *TelegramHandler) Disconnect(c *gin.Context) {
 	response.OK(c, gin.H{"disconnected": true})
 }
 
+// GenerateNotifyCode godoc
+// @Summary      Generate a Telegram admin-notification verification code
+// @Description  Returns a fresh one-time code; the admin sends it as a plain message to the connected bot to bind their chat for lead/payment notifications. See telegram.ConnectUseCase.GenerateNotifyCode.
+// @Tags         telegram
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id path string true "Telegram account ID"
+// @Success      200 {object} response.Envelope{data=TelegramNotifyCodeResponse}
+// @Router       /v1/telegram/accounts/{id}/notify-code [post]
+func (h *TelegramHandler) GenerateNotifyCode(c *gin.Context) {
+	orgID, err := orgIDFromContext(c)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.Error(apperror.InvalidInput("invalid telegram account id", err))
+		return
+	}
+
+	code, err := h.connect.GenerateNotifyCode(c.Request.Context(), orgID, id)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+
+	response.OK(c, TelegramNotifyCodeResponse{Code: code})
+}
+
+// UpdateNotifySettings godoc
+// @Summary      Toggle Telegram admin lead/payment notifications
+// @Tags         telegram
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id path string true "Telegram account ID"
+// @Param        request body TelegramNotifySettingsRequest true "Notification toggles"
+// @Success      200 {object} response.Envelope{data=TelegramAccountResponse}
+// @Router       /v1/telegram/accounts/{id}/notify-settings [patch]
+func (h *TelegramHandler) UpdateNotifySettings(c *gin.Context) {
+	orgID, err := orgIDFromContext(c)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.Error(apperror.InvalidInput("invalid telegram account id", err))
+		return
+	}
+
+	var req TelegramNotifySettingsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.Error(apperror.InvalidInput("invalid request body", err))
+		return
+	}
+
+	account, err := h.connect.UpdateNotifySettings(c.Request.Context(), orgID, id, req.NotifyOnLead, req.NotifyOnPayment)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+
+	response.OK(c, toTelegramAccountResponse(account))
+}
+
 func toTelegramAccountResponse(a *entity.TelegramAccount) TelegramAccountResponse {
 	return TelegramAccountResponse{
-		ID:       a.ID.String(),
-		Username: a.BotUsername,
-		Status:   string(a.Status),
-		Paired:   a.BusinessConnectionID != nil,
+		ID:              a.ID.String(),
+		Username:        a.BotUsername,
+		Status:          string(a.Status),
+		Paired:          a.BusinessConnectionID != nil,
+		NotifyVerified:  a.NotifyChatID != nil,
+		NotifyOnLead:    a.NotifyOnLead,
+		NotifyOnPayment: a.NotifyOnPayment,
 	}
 }

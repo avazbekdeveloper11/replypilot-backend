@@ -516,6 +516,31 @@ type TelegramAccountResponse struct {
 	// you to finish pairing in Telegram" vs. "connected and receiving
 	// messages".
 	Paired bool `json:"paired"`
+	// NotifyVerified reports whether an admin has bound their own chat via
+	// the verification-code handshake (entity.TelegramAccount.NotifyChatID
+	// != nil) — independent of Paired, since admin notifications work even
+	// if Business Bot pairing was never finished.
+	NotifyVerified  bool `json:"notify_verified"`
+	NotifyOnLead    bool `json:"notify_on_lead"`
+	NotifyOnPayment bool `json:"notify_on_payment"`
+}
+
+// TelegramNotifyCodeResponse is what generating/regenerating a verification
+// code returns. The frontend already has the bot's @username from
+// TelegramAccountResponse (the account this code belongs to is already
+// selected/known client-side), so this only carries the code itself. See
+// telegram.ConnectUseCase.GenerateNotifyCode.
+type TelegramNotifyCodeResponse struct {
+	Code string `json:"code"`
+}
+
+// TelegramNotifySettingsRequest is PATCH /v1/telegram/accounts/{id}/notify-settings's
+// body — both fields required (not partial-update) so the frontend always
+// sends the full current toggle state, same simplicity as
+// UpdateProductRequest's non-partial fields.
+type TelegramNotifySettingsRequest struct {
+	NotifyOnLead    bool `json:"notify_on_lead"`
+	NotifyOnPayment bool `json:"notify_on_payment"`
 }
 
 type ConversationResponse struct {

@@ -16,6 +16,7 @@ package telegram
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"fmt"
 	"strings"
 
@@ -127,6 +128,65 @@ func (uc *ConnectUseCase) Connect(ctx context.Context, in ConnectInput) (*entity
 		return nil, apperror.Internal("register telegram webhook", err)
 	}
 
+	return account, nil
+}
+
+// GenerateNotifyCode issues a fresh one-time code the admin sends as a
+// plain Telegram message to this same bot to bind their own chat_id for
+// admin notifications — see entity.TelegramAccount.NotifyVerifyCode's doc
+// comment and WebhookUseCase.handlePlainMessage, the only thing that
+// consumes it. Regenerating (e.g. the admin reloads Settings) overwrites
+// and invalidates any previously-shown, unused code.
+func (uc *ConnectUseCase) GenerateNotifyCode(ctx context.Context, orgID, accountID uuid.UUID) (string, error) {
+	account, err := uc.repo.FindByID(ctx, orgID, accountID)
+	if err != nil {
+		return "", err
+	}
+
+	code, err := randomNotifyCode()
+	if err != nil {
+		return "", apperror.Internal("generate telegram notify code", err)
+	}
+
+	account.NotifyVerifyCode = &code
+	if err := uc.repo.Update(ctx, account); err != nil {
+		return "", err
+	}
+	return code, nil
+}
+
+// randomNotifyCode returns a 6-digit numeric code — short enough to type by
+// hand isn't a concern (the admin copies/pastes or the UI could offer a
+// "send" deep link later), but a plain decimal code is unambiguous to read
+// and to send as a Telegram message. crypto/rand, not math/rand: this code
+// briefly authorizes binding a notification-receiving chat_id, so it should
+// not be guessable.
+func randomNotifyCode() (string, error) {
+	const digits = "0123456789"
+	b := make([]byte, 6)
+	if _, err := cryptorand.Read(b); err != nil {
+		return "", err
+	}
+	for i := range b {
+		b[i] = digits[int(b[i])%len(digits)]
+	}
+	return string(b), nil
+}
+
+// UpdateNotifySettings toggles NotifyOnLead/NotifyOnPayment for an already
+// -connected bot — it never touches NotifyChatID/NotifyVerifyCode, which
+// are only ever written by GenerateNotifyCode and
+// WebhookUseCase.handlePlainMessage respectively.
+func (uc *ConnectUseCase) UpdateNotifySettings(ctx context.Context, orgID, accountID uuid.UUID, notifyOnLead, notifyOnPayment bool) (*entity.TelegramAccount, error) {
+	account, err := uc.repo.FindByID(ctx, orgID, accountID)
+	if err != nil {
+		return nil, err
+	}
+	account.NotifyOnLead = notifyOnLead
+	account.NotifyOnPayment = notifyOnPayment
+	if err := uc.repo.Update(ctx, account); err != nil {
+		return nil, err
+	}
 	return account, nil
 }
 

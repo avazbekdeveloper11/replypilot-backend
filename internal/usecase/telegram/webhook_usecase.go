@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -28,6 +29,13 @@ type EventPublisher interface {
 // downloadable URL — satisfied by internal/integration/telegramapi.Client.ResolveFileURL.
 type FileResolver interface {
 	ResolveFileURL(ctx context.Context, botToken, fileID string) (string, error)
+}
+
+// PlainSender is the narrow port onto sending a confirmation message back
+// to whoever just verified their chat via handlePlainMessage — satisfied by
+// internal/integration/telegramapi.Client.SendPlainMessage.
+type PlainSender interface {
+	SendPlainMessage(ctx context.Context, botToken string, chatID int64, text string) error
 }
 
 // RoutingKeyDMReceived matches instagram.RoutingKeyDMReceived's value
@@ -57,6 +65,7 @@ type WebhookUseCase struct {
 	messageRepo repository.MessageRepository
 	publisher   EventPublisher
 	files       FileResolver
+	sender      PlainSender
 	encryptor   *crypto.AESGCMEncryptor
 	// webhookSecret, when non-empty, must match every delivery's
 	// X-Telegram-Bot-Api-Secret-Token header exactly (see
@@ -76,6 +85,7 @@ func NewWebhookUseCase(
 	messageRepo repository.MessageRepository,
 	publisher EventPublisher,
 	files FileResolver,
+	sender PlainSender,
 	encryptor *crypto.AESGCMEncryptor,
 	webhookSecret string,
 	logger *zap.Logger,
@@ -87,6 +97,7 @@ func NewWebhookUseCase(
 		messageRepo:   messageRepo,
 		publisher:     publisher,
 		files:         files,
+		sender:        sender,
 		encryptor:     encryptor,
 		webhookSecret: webhookSecret,
 		logger:        logger,
@@ -98,9 +109,24 @@ func NewWebhookUseCase(
 // https://core.telegram.org/bots/api#business-features
 
 type telegramUpdate struct {
-	UpdateID           int64                `json:"update_id"`
-	BusinessConnection *businessConnection  `json:"business_connection,omitempty"`
-	BusinessMessage    *businessMessage     `json:"business_message,omitempty"`
+	UpdateID           int64               `json:"update_id"`
+	BusinessConnection *businessConnection `json:"business_connection,omitempty"`
+	BusinessMessage    *businessMessage    `json:"business_message,omitempty"`
+	// Message is a plain, non-business chat with the bot directly (e.g. the
+	// admin pressing /start, or sending their notify verification code) —
+	// see handlePlainMessage. Requires "message" in SetWebhook's
+	// AllowedUpdates (telegramapi.Client.SetWebhook) — an account connected
+	// before that was added won't receive these until it reconnects.
+	Message *plainMessage `json:"message,omitempty"`
+}
+
+// plainMessage mirrors businessMessage's shape trimmed to what
+// handlePlainMessage needs — deliberately not reusing businessMessage
+// itself, since a plain message has no business_connection_id field at all.
+type plainMessage struct {
+	MessageID int64  `json:"message_id"`
+	Chat      tgChat `json:"chat"`
+	Text      string `json:"text"`
 }
 
 // businessConnection is delivered once when an org finishes pairing this
@@ -193,6 +219,11 @@ func (uc *WebhookUseCase) Process(ctx context.Context, accountID uuid.UUID, rawB
 			processErr = err
 		}
 	}
+	if update.Message != nil {
+		if err := uc.handlePlainMessage(ctx, accountID, *update.Message); err != nil {
+			processErr = err
+		}
+	}
 
 	if processErr != nil {
 		errMsg := processErr.Error()
@@ -229,6 +260,60 @@ func (uc *WebhookUseCase) handleBusinessConnection(ctx context.Context, accountI
 	connID := bc.ID
 	account.BusinessConnectionID = &connID
 	return uc.accountRepo.Update(ctx, account)
+}
+
+// handlePlainMessage looks for the org's own admin-notification
+// verification code (see entity.TelegramAccount.NotifyVerifyCode's doc
+// comment and telegram.ConnectUseCase.GenerateNotifyCode) among plain
+// messages sent directly to the bot. Any message that isn't an exact,
+// case-insensitive match for a pending code is silently ignored — this is
+// also where a customer's stray "/start" on the bot itself lands, which is
+// expected and not an error.
+//
+// Deliberately fire-and-forget on the confirmation reply (uc.sender call at
+// the end): binding notify_chat_id is the part that matters; a failed
+// courtesy reply must not make this whole webhook delivery look like a
+// processing failure.
+func (uc *WebhookUseCase) handlePlainMessage(ctx context.Context, accountID uuid.UUID, m plainMessage) error {
+	text := strings.TrimSpace(m.Text)
+	if text == "" {
+		return nil
+	}
+
+	account, err := uc.accountRepo.FindByIDForWebhook(ctx, accountID)
+	if err != nil {
+		if ae, ok := apperror.As(err); ok && ae.Code == apperror.CodeNotFound {
+			return nil
+		}
+		return err
+	}
+
+	if account.NotifyVerifyCode == nil || !strings.EqualFold(text, *account.NotifyVerifyCode) {
+		return nil
+	}
+
+	chatID := m.Chat.ID
+	account.NotifyChatID = &chatID
+	account.NotifyVerifyCode = nil
+	if err := uc.accountRepo.Update(ctx, account); err != nil {
+		return err
+	}
+
+	if uc.sender == nil {
+		return nil
+	}
+	botToken, err := uc.encryptor.Decrypt(account.BotTokenEncrypted)
+	if err != nil {
+		uc.logger.Warn("telegram notify verify: decrypt bot token failed",
+			zap.String("telegram_account_id", account.ID.String()), zap.Error(err))
+		return nil
+	}
+	confirmation := "✅ Ulandi! Endi yangi leadlar va to'lovlar haqida shu yerga xabar beraman."
+	if err := uc.sender.SendPlainMessage(ctx, botToken, chatID, confirmation); err != nil {
+		uc.logger.Warn("telegram notify verify: confirmation send failed",
+			zap.String("telegram_account_id", account.ID.String()), zap.Error(err))
+	}
+	return nil
 }
 
 func (uc *WebhookUseCase) ingestMessage(ctx context.Context, accountID uuid.UUID, m businessMessage) error {

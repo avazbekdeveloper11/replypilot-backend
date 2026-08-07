@@ -194,6 +194,17 @@ type Leads interface {
 	HasOpen(ctx context.Context, orgID, conversationID uuid.UUID) (bool, error)
 }
 
+// Notifier is the narrow port onto admin-facing Telegram notifications —
+// satisfied by telegram.NotifyUseCase.NotifyLead. Declared separately per
+// this package's "usecases don't depend on each other" convention (see
+// TelegramSender's doc comment elsewhere in this file) even though
+// internal/usecase/payment declares an identically-shaped Notifier for
+// NotifyPayment — one concrete *telegram.NotifyUseCase instance satisfies
+// both. May be nil; captureLeadIfPresent nil-checks before calling.
+type Notifier interface {
+	NotifyLead(ctx context.Context, orgID uuid.UUID, phone, summary string)
+}
+
 // authError is satisfied by a Sender error that can identify itself as a
 // Meta authentication failure (an invalid, expired, or revoked access
 // token) — metaapi.GraphAPIError implements this for Graph API error code
@@ -229,6 +240,7 @@ type UseCase struct {
 	telegramAccounts TelegramAccountLookup
 	telegramSender   TelegramSender
 	privateReply     PrivateReplySender
+	notifier         Notifier
 }
 
 func New(
@@ -249,6 +261,7 @@ func New(
 	telegramAccounts TelegramAccountLookup,
 	telegramSender TelegramSender,
 	privateReply PrivateReplySender,
+	notifier Notifier,
 ) *UseCase {
 	return &UseCase{
 		convRepo:         convRepo,
@@ -268,6 +281,7 @@ func New(
 		telegramAccounts: telegramAccounts,
 		telegramSender:   telegramSender,
 		privateReply:     privateReply,
+		notifier:         notifier,
 	}
 }
 
@@ -683,7 +697,12 @@ func (uc *UseCase) captureLeadIfPresent(ctx context.Context, conv *entity.Conver
 		Summary:        uc.summarizeLead(ctx, history, phone),
 		Status:         entity.LeadStatusNew,
 	}
-	_ = uc.leads.Create(ctx, lead)
+	if err := uc.leads.Create(ctx, lead); err != nil {
+		return
+	}
+	if uc.notifier != nil {
+		uc.notifier.NotifyLead(ctx, conv.OrganizationID, phone, lead.Summary)
+	}
 }
 
 // leadSummaryPromptTemplate is a one-off extraction call, not a

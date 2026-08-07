@@ -26,14 +26,32 @@ const (
 // update the moment pairing completes, and that's what fills this in (see
 // telegram.WebhookUseCase). Sending is impossible without it.
 type TelegramAccount struct {
-	ID                    uuid.UUID
-	OrganizationID        uuid.UUID
-	BotTokenEncrypted     []byte
-	BotUsername           *string
-	BusinessConnectionID  *string
-	Status                TelegramAccountStatus
-	ConnectedByUserID     *uuid.UUID
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
-	DeletedAt             *time.Time
+	ID                   uuid.UUID
+	OrganizationID       uuid.UUID
+	BotTokenEncrypted    []byte
+	BotUsername          *string
+	BusinessConnectionID *string
+	Status               TelegramAccountStatus
+	ConnectedByUserID    *uuid.UUID
+	// NotifyChatID is the admin's own Telegram chat id, bound only via the
+	// verification-code handshake described below — nil means "no admin has
+	// verified yet," distinct from NotifyOnLead/NotifyOnPayment being false.
+	// See telegram.NotifyUseCase, the only thing that reads it.
+	NotifyChatID *int64
+	// NotifyVerifyCode is a random one-time code shown in Settings
+	// (telegram.ConnectUseCase.GenerateNotifyCode) that the admin sends as a
+	// plain Telegram message to this same bot to prove they control that
+	// chat — see telegram.WebhookUseCase's plain-message handling. Cleared
+	// back to nil once it's matched, so it can't be reused or observed
+	// later.
+	NotifyVerifyCode *string
+	// NotifyOnLead/NotifyOnPayment gate NotifyUseCase.NotifyLead/NotifyPayment
+	// independently of NotifyChatID being set — both default true (migration
+	// 000021) so a freshly-verified admin starts receiving both kinds of
+	// notification without an extra opt-in step.
+	NotifyOnLead    bool
+	NotifyOnPayment bool
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	DeletedAt       *time.Time
 }

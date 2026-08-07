@@ -33,6 +33,7 @@ import (
 	aiuc "github.com/replypilot/backend/internal/usecase/ai"
 	knowledgebaseuc "github.com/replypilot/backend/internal/usecase/knowledgebase"
 	platformsettingsuc "github.com/replypilot/backend/internal/usecase/platformsettings"
+	telegramuc "github.com/replypilot/backend/internal/usecase/telegram"
 	"github.com/replypilot/backend/pkg/crypto"
 )
 
@@ -127,7 +128,13 @@ func run() error {
 	// (comment-to-DM automation) — see that interface's doc comment.
 	// orgRepo is new for business-hours gating (see ai.withinBusinessHours) —
 	// the first thing HandleInboundMessage checks after the ai_active gate.
-	aiUseCase := aiuc.New(convRepo, msgRepo, accountRepo, aiRespRepo, orgRepo, knowledgeUseCase, geminiClient, metaClient, encryptor, productRepo, clickIntegrationRepo, leadRepo, geminiClient, metaClient, telegramAccountRepo, telegramClient, metaClient)
+	// telegramNotifyUseCase is passed as aiuc.Notifier — a captured lead
+	// pushes an admin notification through the org's connected bot the same
+	// way a completed Click payment does in cmd/api's DI (see
+	// telegram.NotifyUseCase's doc comment for why one instance satisfies
+	// both aiuc.Notifier and paymentuc.Notifier).
+	telegramNotifyUseCase := telegramuc.NewNotifyUseCase(telegramAccountRepo, telegramClient, encryptor, logger)
+	aiUseCase := aiuc.New(convRepo, msgRepo, accountRepo, aiRespRepo, orgRepo, knowledgeUseCase, geminiClient, metaClient, encryptor, productRepo, clickIntegrationRepo, leadRepo, geminiClient, metaClient, telegramAccountRepo, telegramClient, metaClient, telegramNotifyUseCase)
 	platformSettingsUseCase := platformsettingsuc.New(platformSettingsRepo, encryptor)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

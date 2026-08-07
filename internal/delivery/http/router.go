@@ -149,6 +149,8 @@ func NewRouter(h Handlers, mw Middlewares) *gin.Engine {
 			protected.POST("/telegram/connect", h.Telegram.Connect)
 			protected.GET("/telegram/accounts", h.Telegram.List)
 			protected.DELETE("/telegram/accounts/:id", h.Telegram.Disconnect)
+			protected.POST("/telegram/accounts/:id/notify-code", h.Telegram.GenerateNotifyCode)
+			protected.PATCH("/telegram/accounts/:id/notify-settings", h.Telegram.UpdateNotifySettings)
 
 			protected.GET("/conversations", h.Conversation.List)
 			protected.GET("/conversations/:id", h.Conversation.Get)

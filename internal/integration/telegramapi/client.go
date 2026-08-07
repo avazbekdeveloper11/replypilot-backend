@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -92,10 +93,13 @@ type setWebhookRequest struct {
 	SecretToken string `json:"secret_token,omitempty"`
 	// AllowedUpdates restricts delivery to exactly what this codebase
 	// handles (telegram.WebhookUseCase) — business_connection to learn the
-	// pairing id, business_message for inbound DMs. Without this Telegram
-	// defaults to a broader set that would just be ignored on receipt, but
-	// pinning it explicitly documents the actual dependency and avoids
-	// paying for deliveries nothing reads.
+	// pairing id, business_message for inbound DMs, and (added for admin
+	// notifications — see WebhookUseCase.handlePlainMessage) message for the
+	// plain, non-business chats an admin uses to send the bot their
+	// verification code directly. Without this Telegram defaults to a
+	// broader set that would just be ignored on receipt, but pinning it
+	// explicitly documents the actual dependency and avoids paying for
+	// deliveries nothing reads.
 	AllowedUpdates []string `json:"allowed_updates"`
 }
 
@@ -110,7 +114,7 @@ func (c *Client) SetWebhook(ctx context.Context, botToken, webhookURL, secretTok
 	body, err := json.Marshal(setWebhookRequest{
 		URL:            webhookURL,
 		SecretToken:    secretToken,
-		AllowedUpdates: []string{"business_connection", "business_message"},
+		AllowedUpdates: []string{"business_connection", "business_message", "message"},
 	})
 	if err != nil {
 		return err
@@ -143,6 +147,39 @@ func (c *Client) SendMessage(ctx context.Context, botToken, businessConnectionID
 		ChatID:               chatID,
 		Text:                 text,
 		BusinessConnectionID: businessConnectionID,
+	})
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.methodURL(botToken, "sendMessage"), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	return c.doJSON(req, nil)
+}
+
+type sendPlainMessageRequest struct {
+	ChatID string `json:"chat_id"`
+	Text   string `json:"text"`
+}
+
+// SendPlainMessage: POST {apiBase}/bot{token}/sendMessage, with no
+// business_connection_id — used only for admin-facing notifications sent
+// by the bot itself (see telegram.NotifyUseCase), never for customer-facing
+// replies (those go through SendMessage). Kept as a separate method with
+// its own request struct rather than calling SendMessage with an empty
+// businessConnectionID: sendMessageRequest.BusinessConnectionID has no
+// `omitempty`, so reusing it here would send business_connection_id: "" to
+// Telegram, which is untested/undocumented behavior — a plain sendMessage
+// call simply omits the field entirely, which is Telegram's documented,
+// unambiguous way to send as the bot itself.
+func (c *Client) SendPlainMessage(ctx context.Context, botToken string, chatID int64, text string) error {
+	body, err := json.Marshal(sendPlainMessageRequest{
+		ChatID: strconv.FormatInt(chatID, 10),
+		Text:   text,
 	})
 	if err != nil {
 		return err

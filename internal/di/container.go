@@ -177,7 +177,12 @@ func New(cfg *config.Config) (*Container, error) {
 	// instance, several narrow ports" pattern used throughout this file.
 	webhookUseCase := instagramuc.NewWebhookUseCase(webhookLogRepo, instagramAccountRepo, conversationRepo, messageRepo, publisher, graphClient, commentAutomationRepo, graphClient, encryptor, cfg.Meta.AppSecret, cfg.Meta.WebhookVerifyToken, logger)
 	telegramConnectUseCase := telegramuc.NewConnectUseCase(telegramAccountRepo, telegramClient, encryptor, cfg.Telegram.WebhookBaseURL, cfg.Telegram.WebhookSecret)
-	telegramWebhookUseCase := telegramuc.NewWebhookUseCase(webhookLogRepo, telegramAccountRepo, conversationRepo, messageRepo, publisher, telegramClient, encryptor, cfg.Telegram.WebhookSecret, logger)
+	// telegramClient is passed once more here as PlainSender — the
+	// confirmation reply handlePlainMessage sends once an admin's
+	// notify-verification code matches. Same "one concrete instance,
+	// several narrow ports" pattern as graphClient above.
+	telegramWebhookUseCase := telegramuc.NewWebhookUseCase(webhookLogRepo, telegramAccountRepo, conversationRepo, messageRepo, publisher, telegramClient, telegramClient, encryptor, cfg.Telegram.WebhookSecret, logger)
+	telegramNotifyUseCase := telegramuc.NewNotifyUseCase(telegramAccountRepo, telegramClient, encryptor, logger)
 	// geminiClient is passed once more here as conversationuc.Generator —
 	// only Summarize (on-demand conversation summaries) uses it, same "one
 	// concrete instance, another narrow port" pattern as elsewhere in this
@@ -201,7 +206,10 @@ func New(cfg *config.Config) (*Container, error) {
 	// telegramAccountRepo/telegramClient are each passed once more here —
 	// same "one concrete instance, several narrow ports" pattern as
 	// conversationUseCase and aiUseCase above, not new instances.
-	paymentWebhookUseCase := paymentuc.New(clickIntegrationRepo, orderRepo, conversationRepo, productRepo, messageRepo, instagramAccountRepo, graphClient, telegramAccountRepo, telegramClient, encryptor, logger)
+	// telegramNotifyUseCase (constructed above) is passed here as
+	// payment.Notifier — a completed Click payment pushes an admin
+	// notification the same way a captured lead does in cmd/worker-ai.
+	paymentWebhookUseCase := paymentuc.New(clickIntegrationRepo, orderRepo, conversationRepo, productRepo, messageRepo, instagramAccountRepo, graphClient, telegramAccountRepo, telegramClient, telegramNotifyUseCase, encryptor, logger)
 	// geminiClient passed once more here as insightsuc.Generator — same
 	// "one concrete instance, another narrow port" pattern as
 	// conversationUseCase above.

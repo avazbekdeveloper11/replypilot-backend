@@ -106,6 +106,10 @@ func (r *TelegramAccountRepository) Update(ctx context.Context, account *entity.
 			"business_connection_id": model.BusinessConnectionID,
 			"status":                 model.Status,
 			"connected_by_user_id":   model.ConnectedByUserID,
+			"notify_chat_id":         model.NotifyChatID,
+			"notify_verify_code":     model.NotifyVerifyCode,
+			"notify_on_lead":         model.NotifyOnLead,
+			"notify_on_payment":      model.NotifyOnPayment,
 		})
 		rowsAffected = res.RowsAffected
 		return res.Error
@@ -147,6 +151,10 @@ func telegramAccountToModel(a *entity.TelegramAccount) *TelegramAccountModel {
 		BusinessConnectionID: a.BusinessConnectionID,
 		Status:               string(a.Status),
 		ConnectedByUserID:    a.ConnectedByUserID,
+		NotifyChatID:         a.NotifyChatID,
+		NotifyVerifyCode:     a.NotifyVerifyCode,
+		NotifyOnLead:         a.NotifyOnLead,
+		NotifyOnPayment:      a.NotifyOnPayment,
 	}
 }
 
@@ -159,6 +167,10 @@ func modelToTelegramAccount(m *TelegramAccountModel) *entity.TelegramAccount {
 		BusinessConnectionID: m.BusinessConnectionID,
 		Status:               entity.TelegramAccountStatus(m.Status),
 		ConnectedByUserID:    m.ConnectedByUserID,
+		NotifyChatID:         m.NotifyChatID,
+		NotifyVerifyCode:     m.NotifyVerifyCode,
+		NotifyOnLead:         m.NotifyOnLead,
+		NotifyOnPayment:      m.NotifyOnPayment,
 		CreatedAt:            m.CreatedAt,
 		UpdatedAt:            m.UpdatedAt,
 	}
