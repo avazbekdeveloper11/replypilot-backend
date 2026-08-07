@@ -26,12 +26,34 @@ func New(customers repository.CustomerRepository, orders repository.OrderReposit
 }
 
 // List returns the org's customer database, biggest spenders first — see
-// repository.CustomerRepository.ListSummaries' doc comment.
-func (uc *UseCase) List(ctx context.Context, orgID uuid.UUID, search string) ([]*entity.CustomerSummary, error) {
-	return uc.customers.ListSummaries(ctx, repository.CustomerListParams{
+// repository.CustomerRepository.ListSummaries' doc comment. Every
+// returned summary has its RFM segment/scores populated (see rfm.go); if
+// segment is non-empty, the list is additionally filtered down to just
+// that segment. Filtering happens here, in Go, after scoring — not
+// pushed into SQL — because a segment is relative to this call's whole
+// result set (quantiles), so it can't be computed by the database one
+// row at a time.
+func (uc *UseCase) List(ctx context.Context, orgID uuid.UUID, search string, segment entity.RFMSegment) ([]*entity.CustomerSummary, error) {
+	summaries, err := uc.customers.ListSummaries(ctx, repository.CustomerListParams{
 		OrganizationID: orgID,
 		Search:         search,
 	})
+	if err != nil {
+		return nil, err
+	}
+
+	assignRFMSegments(summaries)
+
+	if segment == "" {
+		return summaries, nil
+	}
+	filtered := make([]*entity.CustomerSummary, 0, len(summaries))
+	for _, s := range summaries {
+		if s.Segment == segment {
+			filtered = append(filtered, s)
+		}
+	}
+	return filtered, nil
 }
 
 // Orders returns one customer's full order history (every status, not

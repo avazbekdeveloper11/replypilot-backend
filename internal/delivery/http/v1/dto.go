@@ -373,6 +373,11 @@ type CampaignSendResponse struct {
 // than serialized as null when unset (a customer with no orders yet has
 // no LastPaidAt), so the frontend can check for the field's presence
 // instead of null-checking every timestamp.
+//
+// Segment is one of "new", "champion", "loyal", "at_risk", "sleeping",
+// "lost" — see entity.RFMSegment. RecencyScore/FrequencyScore/
+// MonetaryScore are 1-5 (0 when Segment is "new", since there's no
+// purchase history to score).
 type CustomerSummaryResponse struct {
 	ConversationID   string  `json:"conversation_id"`
 	Channel          string  `json:"channel"`
@@ -381,6 +386,10 @@ type CustomerSummaryResponse struct {
 	TotalPaidCents   int64   `json:"total_paid_cents"`
 	PaidOrderCount   int     `json:"paid_order_count"`
 	LastPaidAt       *string `json:"last_paid_at,omitempty"`
+	Segment          string  `json:"segment"`
+	RecencyScore     int     `json:"recency_score"`
+	FrequencyScore   int     `json:"frequency_score"`
+	MonetaryScore    int     `json:"monetary_score"`
 }
 
 // CustomerOrderResponse mirrors entity.Order — the customer database's

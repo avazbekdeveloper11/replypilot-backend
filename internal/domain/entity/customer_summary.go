@@ -27,4 +27,16 @@ type CustomerSummary struct {
 	TotalPaidCents int64
 	PaidOrderCount int
 	LastPaidAt     *time.Time
+
+	// Segment/RecencyScore/FrequencyScore/MonetaryScore are computed by
+	// usecase/customer's RFM scoring pass, not by the repository — see
+	// that package's rfm.go doc comments. Scores are 1 (worst) to 5
+	// (best), relative to this org's own customers; all four fields are
+	// zero-valued (Segment == "") until that pass runs, so callers that
+	// only need raw purchase totals (e.g. before segmentation existed)
+	// still get a valid struct.
+	Segment        RFMSegment
+	RecencyScore   int
+	FrequencyScore int
+	MonetaryScore  int
 }

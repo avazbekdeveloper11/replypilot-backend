@@ -27,6 +27,7 @@ func NewCustomerHandler(uc *customer.UseCase) *CustomerHandler {
 // @Produce      json
 // @Security     BearerAuth
 // @Param        search query string false "Filter by customer username (case-insensitive substring)"
+// @Param        segment query string false "Filter by RFM segment (new, champion, loyal, at_risk, sleeping, lost)"
 // @Success      200 {object} response.Envelope{data=[]CustomerSummaryResponse}
 // @Router       /v1/customers [get]
 func (h *CustomerHandler) List(c *gin.Context) {
@@ -37,7 +38,8 @@ func (h *CustomerHandler) List(c *gin.Context) {
 	}
 
 	search := c.Query("search")
-	summaries, err := h.uc.List(c.Request.Context(), orgID, search)
+	segment := entity.RFMSegment(c.Query("segment"))
+	summaries, err := h.uc.List(c.Request.Context(), orgID, search, segment)
 	if err != nil {
 		c.Error(err)
 		return
@@ -92,6 +94,10 @@ func toCustomerSummaryResponse(s *entity.CustomerSummary) CustomerSummaryRespons
 		CustomerUsername: s.CustomerUsername,
 		TotalPaidCents:   s.TotalPaidCents,
 		PaidOrderCount:   s.PaidOrderCount,
+		Segment:          string(s.Segment),
+		RecencyScore:     s.RecencyScore,
+		FrequencyScore:   s.FrequencyScore,
+		MonetaryScore:    s.MonetaryScore,
 	}
 	if s.LastMessageAt != nil {
 		formatted := s.LastMessageAt.Format(time.RFC3339)
