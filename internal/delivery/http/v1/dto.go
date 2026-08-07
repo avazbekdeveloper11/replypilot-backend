@@ -198,6 +198,18 @@ type UpdateProductRequest struct {
 	IsActive    bool    `json:"is_active"`
 }
 
+// ProductImportResponse is ProductHandler.Import's response. Created
+// mirrors List's []ProductResponse shape exactly (same toProductResponse
+// helper); the counts let the frontend show "N ta mahsulot qo'shildi, M
+// qator o'tkazib yuborildi" instead of a bare success toast — see
+// product.UseCase.ImportResult's doc comment for what each count means.
+type ProductImportResponse struct {
+	Created       []ProductResponse `json:"created"`
+	CreatedCount  int               `json:"created_count"`
+	SkippedRows   int               `json:"skipped_rows"`
+	TotalRowsRead int               `json:"total_rows_read"`
+}
+
 // ClickIntegrationResponse never includes anything secret — merchant_id and
 // service_id are Click's own public identifiers (see
 // entity.ClickIntegration's doc comment), safe to round-trip to the

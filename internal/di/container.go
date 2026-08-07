@@ -191,7 +191,10 @@ func New(cfg *config.Config) (*Container, error) {
 	userUseCase := useruc.New(userRepo)
 	adminUseCase := adminuc.New(adminRepo, orgRepo)
 	platformSettingsUseCase := platformsettingsuc.New(platformSettingsRepo, encryptor)
-	productUseCase := productuc.New(productRepo)
+	// geminiClient passed once more here as productuc.Generator, used only
+	// by Import — same "one concrete instance, several narrow ports"
+	// pattern as everywhere else geminiClient is reused in this file.
+	productUseCase := productuc.New(productRepo, geminiClient)
 	clickUseCase := clickuc.New(clickIntegrationRepo, encryptor)
 	leadUseCase := leaduc.New(leadRepo)
 	// clickIntegrationRepo, instagramAccountRepo/graphClient, and

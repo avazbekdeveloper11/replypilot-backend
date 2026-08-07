@@ -188,6 +188,7 @@ func NewRouter(h Handlers, mw Middlewares) *gin.Engine {
 
 			protected.GET("/products", h.Product.List)
 			protected.POST("/products", h.Product.Create)
+			protected.POST("/products/import", h.Product.Import)
 			protected.PATCH("/products/:id", h.Product.Update)
 			protected.DELETE("/products/:id", h.Product.Delete)
 
