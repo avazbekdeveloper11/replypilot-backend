@@ -382,10 +382,10 @@ func (uc *WebhookUseCase) sendToCustomer(ctx context.Context, orgID uuid.UUID, c
 		}
 		return uc.telegramSender.SendMessage(ctx, botToken, *account.BusinessConnectionID, conv.CustomerIGID, text)
 	default:
-		if conv.InstagramAccountID == nil {
+		if conv.InstagramAccountID == uuid.Nil {
 			return errors.New("conversation has channel=instagram but no instagram_account_id")
 		}
-		account, err := uc.accountRepo.FindByID(ctx, orgID, *conv.InstagramAccountID)
+		account, err := uc.accountRepo.FindByID(ctx, orgID, conv.InstagramAccountID)
 		if err != nil {
 			return err
 		}
