@@ -43,6 +43,7 @@ import (
 	adminuc "github.com/replypilot/backend/internal/usecase/admin"
 	analyticsuc "github.com/replypilot/backend/internal/usecase/analytics"
 	billinguc "github.com/replypilot/backend/internal/usecase/billing"
+	campaignuc "github.com/replypilot/backend/internal/usecase/campaign"
 	clickuc "github.com/replypilot/backend/internal/usecase/click"
 	commentautomationuc "github.com/replypilot/backend/internal/usecase/commentautomation"
 	dashboarduc "github.com/replypilot/backend/internal/usecase/dashboard"
@@ -197,6 +198,12 @@ func New(cfg *config.Config) (*Container, error) {
 	// conversationUseCase above.
 	insightsUseCase := insightsuc.New(aiInsightsRepo, orderRepo, leadRepo, dashboardRepo, messageRepo, geminiClient)
 	commentAutomationUseCase := commentautomationuc.New(commentAutomationRepo)
+	// conversationRepo, messageRepo, instagramAccountRepo/graphClient,
+	// productRepo, telegramAccountRepo/telegramClient, and geminiClient are
+	// each passed once more here — same "one concrete instance, several
+	// narrow ports" pattern as paymentWebhookUseCase/conversationUseCase
+	// above, not new instances.
+	campaignUseCase := campaignuc.New(conversationRepo, messageRepo, instagramAccountRepo, productRepo, graphClient, encryptor, telegramAccountRepo, telegramClient, geminiClient)
 
 	// --- handlers ---
 	handlers := httpserver.Handlers{
@@ -220,6 +227,7 @@ func New(cfg *config.Config) (*Container, error) {
 		Lead:              v1.NewLeadHandler(leadUseCase),
 		Insights:          v1.NewInsightsHandler(insightsUseCase),
 		CommentAutomation: v1.NewCommentAutomationHandler(commentAutomationUseCase),
+		Campaign:          v1.NewCampaignHandler(campaignUseCase),
 	}
 
 	// --- middlewares ---

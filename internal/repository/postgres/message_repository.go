@@ -136,6 +136,28 @@ func (r *MessageRepository) ListRecentInboundByOrganization(ctx context.Context,
 	return messages, nil
 }
 
+// LastCustomerMessageAt backs campaign.UseCase.Send's point-in-time
+// eligibility re-check — see the interface doc comment for why this exists
+// separately from the cached value ListBroadcastCandidates already
+// computed for Draft. A plain scalar MAX query, not a LATERAL join, since
+// this is always scoped to one already-known conversation.
+func (r *MessageRepository) LastCustomerMessageAt(ctx context.Context, orgID, conversationID uuid.UUID) (*time.Time, error) {
+	var result struct {
+		MaxCreatedAt *time.Time
+	}
+	err := withTenant(ctx, r.db, orgID, func(tx *gorm.DB) error {
+		return tx.Model(&MessageModel{}).
+			Select("max(created_at) as max_created_at").
+			Where("organization_id = ? AND conversation_id = ? AND direction = ? AND sender_type = ?",
+				orgID, conversationID, string(entity.MessageDirectionInbound), string(entity.MessageSenderCustomer)).
+			Scan(&result).Error
+	})
+	if err != nil {
+		return nil, apperror.Internal("last customer message at", err)
+	}
+	return result.MaxCreatedAt, nil
+}
+
 func messageToModel(msg *entity.Message) (*MessageModel, error) {
 	var metadataJSON []byte
 	if msg.Metadata != nil {

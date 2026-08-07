@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -13,6 +14,13 @@ import (
 )
 
 const defaultConversationPageSize = 20
+
+// defaultBroadcastCandidateLimit mirrors this codebase's "MVP-sized shop"
+// capping convention (see internal/usecase/insights' maxSampledMessages) —
+// campaign.UseCase.Draft caps how many conversations one instruction can
+// ever resolve to, so a vague instruction on a large org can't accidentally
+// draft a campaign to tens of thousands of people in one call.
+const defaultBroadcastCandidateLimit = 500
 
 type ConversationRepository struct {
 	db *gorm.DB
@@ -138,6 +146,96 @@ func (r *ConversationRepository) Update(ctx context.Context, conv *entity.Conver
 		return apperror.NotFound("conversation not found")
 	}
 	return nil
+}
+
+// ListBroadcastCandidates resolves campaign.UseCase.Draft's segment — see
+// the interface doc comment. Two queries, not one: the first (raw SQL, a
+// LATERAL join) computes the one thing no existing method exposes — each
+// conversation's last CUSTOMER-inbound message time, as opposed to
+// conversations.last_message_at which bumps on outbound sends too — plus
+// whether a paid order exists, then the second reuses the ordinary
+// tenant-scoped Find+modelToConversation path for the matched rows. Kept as
+// two round trips rather than one giant SELECT with every ConversationModel
+// column duplicated into the raw query by hand, which would silently drift
+// out of sync the next time a column is added to conversations.
+func (r *ConversationRepository) ListBroadcastCandidates(ctx context.Context, orgID uuid.UUID, minDaysAgo int, maxDaysAgo *int, channel *entity.ConversationChannel, limit int) ([]*repository.BroadcastCandidate, error) {
+	if limit <= 0 || limit > defaultBroadcastCandidateLimit {
+		limit = defaultBroadcastCandidateLimit
+	}
+
+	query := `
+		SELECT c.id AS conversation_id,
+		       lm.last_customer_message_at AS last_customer_message_at,
+		       EXISTS(SELECT 1 FROM orders o WHERE o.conversation_id = c.id AND o.status = 'paid') AS has_paid_order
+		FROM conversations c
+		JOIN LATERAL (
+			SELECT MAX(m.created_at) AS last_customer_message_at
+			FROM messages m
+			WHERE m.conversation_id = c.id AND m.direction = 'inbound' AND m.sender_type = 'customer'
+		) lm ON true
+		WHERE c.organization_id = ?
+		  AND c.deleted_at IS NULL
+		  AND lm.last_customer_message_at IS NOT NULL
+		  AND lm.last_customer_message_at <= now() - make_interval(days => ?)`
+	args := []any{orgID, minDaysAgo}
+
+	if maxDaysAgo != nil {
+		query += ` AND lm.last_customer_message_at >= now() - make_interval(days => ?)`
+		args = append(args, *maxDaysAgo)
+	}
+	if channel != nil {
+		query += ` AND c.channel = ?`
+		args = append(args, string(*channel))
+	}
+	query += ` ORDER BY lm.last_customer_message_at DESC LIMIT ?`
+	args = append(args, limit)
+
+	var rows []struct {
+		ConversationID        uuid.UUID `gorm:"column:conversation_id"`
+		LastCustomerMessageAt time.Time `gorm:"column:last_customer_message_at"`
+		HasPaidOrder          bool      `gorm:"column:has_paid_order"`
+	}
+	err := withTenant(ctx, r.db, orgID, func(tx *gorm.DB) error {
+		return tx.Raw(query, args...).Scan(&rows).Error
+	})
+	if err != nil {
+		return nil, apperror.Internal("list broadcast candidates", err)
+	}
+	if len(rows) == 0 {
+		return []*repository.BroadcastCandidate{}, nil
+	}
+
+	ids := make([]uuid.UUID, len(rows))
+	for i, row := range rows {
+		ids[i] = row.ConversationID
+	}
+	var models []ConversationModel
+	err = withTenant(ctx, r.db, orgID, func(tx *gorm.DB) error {
+		return tx.Where("id IN ?", ids).Find(&models).Error
+	})
+	if err != nil {
+		return nil, apperror.Internal("load broadcast candidate conversations", err)
+	}
+	byID := make(map[uuid.UUID]*ConversationModel, len(models))
+	for i := range models {
+		byID[models[i].ID] = &models[i]
+	}
+
+	candidates := make([]*repository.BroadcastCandidate, 0, len(rows))
+	for _, row := range rows {
+		model, ok := byID[row.ConversationID]
+		if !ok {
+			// Deleted or reassigned between the two queries — skip rather
+			// than fail the whole draft over one stale row.
+			continue
+		}
+		candidates = append(candidates, &repository.BroadcastCandidate{
+			Conversation:          modelToConversation(model),
+			LastCustomerMessageAt: row.LastCustomerMessageAt,
+			HasPaidOrder:          row.HasPaidOrder,
+		})
+	}
+	return candidates, nil
 }
 
 func conversationToModel(c *entity.Conversation) *ConversationModel {

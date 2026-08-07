@@ -38,6 +38,7 @@ type Handlers struct {
 	Lead              *v1.LeadHandler
 	Insights          *v1.InsightsHandler
 	CommentAutomation *v1.CommentAutomationHandler
+	Campaign          *v1.CampaignHandler
 }
 
 // Middlewares bundles the gin.HandlerFuncs that need constructed
@@ -187,6 +188,9 @@ func NewRouter(h Handlers, mw Middlewares) *gin.Engine {
 
 			protected.GET("/integrations/comment-automation", h.CommentAutomation.Get)
 			protected.PUT("/integrations/comment-automation", h.CommentAutomation.Update)
+
+			protected.POST("/campaigns/draft", h.Campaign.Draft)
+			protected.POST("/campaigns/send", h.Campaign.Send)
 
 			protected.GET("/leads", h.Lead.List)
 			protected.PATCH("/leads/:id", h.Lead.UpdateStatus)

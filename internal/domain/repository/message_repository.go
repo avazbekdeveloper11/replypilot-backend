@@ -33,4 +33,15 @@ type MessageRepository interface {
 	// filtering happens in the usecase, which also decides how much of
 	// each message's text actually reaches the Gemini prompt.
 	ListRecentInboundByOrganization(ctx context.Context, orgID uuid.UUID, limit int) ([]*entity.Message, error)
+	// LastCustomerMessageAt returns the timestamp of this conversation's
+	// most recent inbound, customer-sent message — nil if the customer has
+	// never sent one (shouldn't normally happen; every conversation is
+	// created by an inbound message, but defensive nonetheless). This is
+	// the single number Instagram's 24-hour messaging-window rule is based
+	// on, distinct from conversations.LastMessageAt which also bumps on
+	// outbound sends — see campaign.UseCase.Send's doc comment for why a
+	// point-in-time re-check at send time needs this, not the cached
+	// per-candidate value campaign.UseCase.Draft already computed via
+	// ConversationRepository.ListBroadcastCandidates.
+	LastCustomerMessageAt(ctx context.Context, orgID, conversationID uuid.UUID) (*time.Time, error)
 }

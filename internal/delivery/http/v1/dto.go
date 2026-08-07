@@ -316,6 +316,58 @@ type AdminPlanSubscriptionCountResponse struct {
 	Count    int64  `json:"count"`
 }
 
+type DraftCampaignRequest struct {
+	Instruction string `json:"instruction" binding:"required"`
+}
+
+// CampaignRecipientResponse mirrors campaign.RecipientPreview. Eligible is
+// always true for a Telegram recipient; for Instagram it reflects Meta's
+// 24-hour messaging window at the moment the draft was generated —
+// IneligibleReason explains why in plain Uzbek when false, so the
+// dashboard can show it directly rather than needing its own copy.
+type CampaignRecipientResponse struct {
+	ConversationID        string  `json:"conversation_id"`
+	CustomerUsername      *string `json:"customer_username,omitempty"`
+	Channel               string  `json:"channel"`
+	LastCustomerMessageAt string  `json:"last_customer_message_at"`
+	Eligible              bool    `json:"eligible"`
+	IneligibleReason      *string `json:"ineligible_reason,omitempty"`
+}
+
+// CampaignDraftResponse mirrors campaign.CampaignDraft. Message is
+// pre-filled but editable client-side — POST /v1/campaigns/send takes
+// whatever the admin ends up with, not this exact string.
+type CampaignDraftResponse struct {
+	Message                 string                       `json:"message"`
+	MinDaysSinceLastMessage int                          `json:"min_days_since_last_message"`
+	MaxDaysSinceLastMessage *int                         `json:"max_days_since_last_message"`
+	Channel                 string                       `json:"channel"`
+	ExcludeCustomersWhoPaid bool                         `json:"exclude_customers_who_paid"`
+	Recipients              []CampaignRecipientResponse `json:"recipients"`
+	EligibleCount           int                          `json:"eligible_count"`
+	IneligibleCount         int                          `json:"ineligible_count"`
+}
+
+type SendCampaignRequest struct {
+	Message string `json:"message" binding:"required"`
+	// ConversationIDs is exactly what the admin approved on the draft
+	// screen — see campaign.UseCase's doc comment on why Draft/Send are
+	// stateless: there's no server-side draft id, this list IS the
+	// approval.
+	ConversationIDs []string `json:"conversation_ids" binding:"required,min=1"`
+}
+
+// CampaignSkippedResponse mirrors campaign.SkippedRecipient.
+type CampaignSkippedResponse struct {
+	ConversationID string `json:"conversation_id"`
+	Reason         string `json:"reason"`
+}
+
+type CampaignSendResponse struct {
+	SentCount int                        `json:"sent_count"`
+	Skipped   []CampaignSkippedResponse `json:"skipped"`
+}
+
 // AdminPlatformStatsResponse mirrors repository.PlatformStats exactly —
 // see that struct's doc comment on MRRCentsApprox for why it's labeled
 // "approx", not a precise revenue figure.
