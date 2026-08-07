@@ -46,6 +46,7 @@ import (
 	campaignuc "github.com/replypilot/backend/internal/usecase/campaign"
 	clickuc "github.com/replypilot/backend/internal/usecase/click"
 	commentautomationuc "github.com/replypilot/backend/internal/usecase/commentautomation"
+	customeruc "github.com/replypilot/backend/internal/usecase/customer"
 	dashboarduc "github.com/replypilot/backend/internal/usecase/dashboard"
 	insightsuc "github.com/replypilot/backend/internal/usecase/insights"
 	instagramuc "github.com/replypilot/backend/internal/usecase/instagram"
@@ -140,6 +141,7 @@ func New(cfg *config.Config) (*Container, error) {
 	orderRepo := postgresrepo.NewOrderRepository(db)
 	aiInsightsRepo := postgresrepo.NewAIInsightsRepository(db)
 	commentAutomationRepo := postgresrepo.NewCommentAutomationRepository(db)
+	customerRepo := postgresrepo.NewCustomerRepository(db)
 	refreshTokenStore := redisrepo.NewRefreshTokenStore(redisClient)
 	oauthStateStore := redisrepo.NewOAuthStateStore(redisClient)
 	otpStore := redisrepo.NewOTPStore(redisClient)
@@ -204,6 +206,10 @@ func New(cfg *config.Config) (*Container, error) {
 	// narrow ports" pattern as paymentWebhookUseCase/conversationUseCase
 	// above, not new instances.
 	campaignUseCase := campaignuc.New(conversationRepo, messageRepo, instagramAccountRepo, productRepo, graphClient, encryptor, telegramAccountRepo, telegramClient, geminiClient)
+	// conversationRepo and orderRepo passed once more here — same "one
+	// concrete instance, several consumers" pattern as campaignUseCase
+	// above.
+	customerUseCase := customeruc.New(customerRepo, orderRepo, conversationRepo)
 
 	// --- handlers ---
 	handlers := httpserver.Handlers{
@@ -228,6 +234,7 @@ func New(cfg *config.Config) (*Container, error) {
 		Insights:          v1.NewInsightsHandler(insightsUseCase),
 		CommentAutomation: v1.NewCommentAutomationHandler(commentAutomationUseCase),
 		Campaign:          v1.NewCampaignHandler(campaignUseCase),
+		Customer:          v1.NewCustomerHandler(customerUseCase),
 	}
 
 	// --- middlewares ---

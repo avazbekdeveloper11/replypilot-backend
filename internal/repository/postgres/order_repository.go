@@ -92,6 +92,28 @@ func (r *OrderRepository) Update(ctx context.Context, order *entity.Order) error
 	return nil
 }
 
+// ListByConversation backs the customer database's order-history
+// drill-down — see the interface doc comment on why every status is
+// included, not just paid.
+func (r *OrderRepository) ListByConversation(ctx context.Context, orgID, conversationID uuid.UUID) ([]*entity.Order, error) {
+	var models []OrderModel
+	err := withTenant(ctx, r.db, orgID, func(tx *gorm.DB) error {
+		return tx.
+			Where("organization_id = ? AND conversation_id = ?", orgID, conversationID).
+			Order("created_at DESC").
+			Find(&models).Error
+	})
+	if err != nil {
+		return nil, apperror.Internal("list orders by conversation", err)
+	}
+
+	orders := make([]*entity.Order, 0, len(models))
+	for i := range models {
+		orders = append(orders, modelToOrder(&models[i]))
+	}
+	return orders, nil
+}
+
 // Stats is a real SQL aggregate (COUNT/COALESCE(SUM,0)) over status='paid'
 // — see the interface doc comment on why this, not Gemini, is the source
 // of truth for sales figures.

@@ -20,6 +20,14 @@ type OrderRepository interface {
 	// Prepare treats that as "create one now", not an error condition.
 	FindByTransactionParam(ctx context.Context, orgID uuid.UUID, transactionParam string) (*entity.Order, error)
 	Update(ctx context.Context, order *entity.Order) error
+	// ListByConversation backs the customer database's per-customer order
+	// history drill-down (internal/usecase/customer) — every order for
+	// this conversation, any status, newest first. Unlike Stats, this
+	// deliberately doesn't filter to status='paid' only: the admin looking
+	// at one customer's history benefits from seeing a pending/failed
+	// attempt too (e.g. "they tried to buy this and it didn't go
+	// through"), not just confirmed sales.
+	ListByConversation(ctx context.Context, orgID, conversationID uuid.UUID) ([]*entity.Order, error)
 	// Stats is a real aggregate query (COUNT/SUM over status='paid'), not
 	// something Gemini computes — internal/usecase/insights only asks
 	// Gemini to narrate this alongside a qualitative read of recent

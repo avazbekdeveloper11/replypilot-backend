@@ -368,6 +368,36 @@ type CampaignSendResponse struct {
 	Skipped   []CampaignSkippedResponse `json:"skipped"`
 }
 
+// CustomerSummaryResponse mirrors entity.CustomerSummary — one row of the
+// customer database. LastMessageAt/LastPaidAt are omitted entirely rather
+// than serialized as null when unset (a customer with no orders yet has
+// no LastPaidAt), so the frontend can check for the field's presence
+// instead of null-checking every timestamp.
+type CustomerSummaryResponse struct {
+	ConversationID   string  `json:"conversation_id"`
+	Channel          string  `json:"channel"`
+	CustomerUsername *string `json:"customer_username,omitempty"`
+	LastMessageAt    *string `json:"last_message_at,omitempty"`
+	TotalPaidCents   int64   `json:"total_paid_cents"`
+	PaidOrderCount   int     `json:"paid_order_count"`
+	LastPaidAt       *string `json:"last_paid_at,omitempty"`
+}
+
+// CustomerOrderResponse mirrors entity.Order — the customer database's
+// per-customer order-history drill-down. ProductName rather than
+// ProductID: the frontend never needs to look the product back up, and a
+// deleted product's order should still show its name (see entity.Order's
+// doc comment on why ProductNameSnapshot exists).
+type CustomerOrderResponse struct {
+	ID          string  `json:"id"`
+	ProductName string  `json:"product_name"`
+	AmountCents int64   `json:"amount_cents"`
+	Currency    string  `json:"currency"`
+	Status      string  `json:"status"`
+	PaidAt      *string `json:"paid_at,omitempty"`
+	CreatedAt   string  `json:"created_at"`
+}
+
 // AdminPlatformStatsResponse mirrors repository.PlatformStats exactly —
 // see that struct's doc comment on MRRCentsApprox for why it's labeled
 // "approx", not a precise revenue figure.
