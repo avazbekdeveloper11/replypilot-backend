@@ -28,8 +28,11 @@ type CreateInput struct {
 	OrganizationID uuid.UUID
 	Name           string
 	Description    *string
-	PriceCents     int64
-	Currency       string
+	// PriceCents nil means "price on request" — see entity.Product's doc
+	// comment. Not "0 unless told otherwise": a caller that wants an
+	// explicit free/zero price must say so explicitly via a non-nil 0.
+	PriceCents *int64
+	Currency   string
 }
 
 func (uc *UseCase) Create(ctx context.Context, in CreateInput) (*entity.Product, error) {
@@ -37,7 +40,7 @@ func (uc *UseCase) Create(ctx context.Context, in CreateInput) (*entity.Product,
 	if name == "" {
 		return nil, apperror.InvalidInput("product name is required", nil)
 	}
-	if in.PriceCents < 0 {
+	if in.PriceCents != nil && *in.PriceCents < 0 {
 		return nil, apperror.InvalidInput("price cannot be negative", nil)
 	}
 	currency := strings.TrimSpace(in.Currency)
@@ -72,9 +75,14 @@ type UpdateInput struct {
 	ID             uuid.UUID
 	Name           string
 	Description    *string
-	PriceCents     int64
-	Currency       string
-	IsActive       bool
+	// PriceCents nil means "price on request" — same convention as
+	// CreateInput.PriceCents. An update that should CLEAR a previously-set
+	// price must pass nil explicitly; there's no separate "don't touch
+	// price" signal here, matching every other field on this struct
+	// (Update always replaces the whole record, never patches).
+	PriceCents *int64
+	Currency   string
+	IsActive   bool
 }
 
 func (uc *UseCase) Update(ctx context.Context, in UpdateInput) (*entity.Product, error) {
@@ -82,7 +90,7 @@ func (uc *UseCase) Update(ctx context.Context, in UpdateInput) (*entity.Product,
 	if name == "" {
 		return nil, apperror.InvalidInput("product name is required", nil)
 	}
-	if in.PriceCents < 0 {
+	if in.PriceCents != nil && *in.PriceCents < 0 {
 		return nil, apperror.InvalidInput("price cannot be negative", nil)
 	}
 	currency := strings.TrimSpace(in.Currency)

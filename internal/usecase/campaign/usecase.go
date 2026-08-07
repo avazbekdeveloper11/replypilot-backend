@@ -499,7 +499,11 @@ func buildCampaignProductContext(products []*entity.Product) string {
 	var b strings.Builder
 	b.WriteString("Mahsulotlar:\n")
 	for _, p := range products {
-		fmt.Fprintf(&b, "- %s (%s so'm)\n", p.Name, formatCampaignSom(p.PriceCents))
+		if p.PriceCents == nil {
+			fmt.Fprintf(&b, "- %s (narxi so'rov asosida)\n", p.Name)
+			continue
+		}
+		fmt.Fprintf(&b, "- %s (%s so'm)\n", p.Name, formatCampaignSom(*p.PriceCents))
 	}
 	return b.String()
 }

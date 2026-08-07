@@ -840,6 +840,7 @@ Rules:
 - Match the customer's language (e.g. reply in Uzbek if they wrote in Uzbek).
 - Never use markdown formatting — no **bold**, no *italics*, no bullet points, no headers. Instagram and Telegram DMs render plain text only, so any asterisks or underscores you write for emphasis show up literally to the customer instead of being rendered — write plain sentences instead.
 - Payment links are dangerous to get wrong: only ever send a URL that appears character-for-character in the "Products" section below. NEVER type out, construct, guess, modify, or shorten a payment link yourself, even partially — copy it exactly or don't send one. If a customer wants to pay for something that either isn't in the Products list, or is listed there WITHOUT a payment link, do not invent one — tell them warmly that a team member will send payment details shortly.
+- A product marked "narxi so'rov asosida (NEEDS_PHONE_NUMBER: ...)" has no fixed price — never invent, estimate, or guess a number for it. If the customer asks its price or wants to buy it, tell them warmly a team member will follow up with the exact price, and naturally ask for their phone number so that person can reach them. Don't be pushy about it or turn it into an interrogation — ask once, like a real salesperson closing out the conversation, not a form.
 - When the customer's latest message includes a photo, actually look at it and respond to what's in it as a natural part of the conversation — it might be a product they're asking about, a screenshot of a question, a payment receipt, a size/color they're showing you, etc. Don't ignore the image and only answer any accompanying text.
 - When the customer's latest message is a voice message, actually listen to it and respond to what they said, the same as if they'd typed it — including matching whatever language they spoke in, not just the language of earlier text in this conversation.
 - When the customer's latest message is a video, actually watch it and respond to what's shown/said in it, the same as you would a photo or voice message — it might be a product demo, an unboxing question, a problem they're showing you, etc.
@@ -905,7 +906,18 @@ func (uc *UseCase) buildProductContext(ctx context.Context, orgID, conversationI
 		if i > 0 {
 			b.WriteString("\n")
 		}
-		fmt.Fprintf(&b, "- %s — %s so'm", p.Name, formatSom(p.PriceCents))
+		// A nil PriceCents is "price on request" (see entity.Product's doc
+		// comment) — no number to quote and no valid amount to build a Click
+		// link for, so both are skipped in favor of a NEEDS_PHONE_NUMBER
+		// marker the system prompt's Rules section explains how to act on.
+		if p.PriceCents == nil {
+			fmt.Fprintf(&b, "- %s — narxi so'rov asosida (NEEDS_PHONE_NUMBER: don't quote a price, ask for their phone number instead)", p.Name)
+			if p.Description != nil && strings.TrimSpace(*p.Description) != "" {
+				fmt.Fprintf(&b, " (%s)", strings.TrimSpace(*p.Description))
+			}
+			continue
+		}
+		fmt.Fprintf(&b, "- %s — %s so'm", p.Name, formatSom(*p.PriceCents))
 		if p.Description != nil && strings.TrimSpace(*p.Description) != "" {
 			fmt.Fprintf(&b, " (%s)", strings.TrimSpace(*p.Description))
 		}
@@ -914,7 +926,7 @@ func (uc *UseCase) buildProductContext(ctx context.Context, orgID, conversationI
 				MerchantID:       clickIntegration.MerchantID,
 				ServiceID:        clickIntegration.ServiceID,
 				MerchantUserID:   derefOr(clickIntegration.MerchantUserID, ""),
-				Amount:           clickapi.FormatAmount(p.PriceCents),
+				Amount:           clickapi.FormatAmount(*p.PriceCents),
 				// See clickapi.BuildTransactionParam's doc comment — kept as
 				// the single source of truth for this format so
 				// payment.WebhookUseCase's ParseTransactionParam can never

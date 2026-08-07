@@ -167,27 +167,33 @@ type UpdateKnowledgeDocumentRequest struct {
 // PriceCents stays in the smallest currency unit here too — the frontend
 // formats it for display the same way it already formats
 // PlanResponse.PriceMonthlyCents, no new formatting convention introduced.
+// A nil PriceCents means "price on request" — see entity.Product's doc
+// comment; the frontend shows a "so'rov asosida" label for it instead of a
+// formatted amount.
 type ProductResponse struct {
 	ID          string  `json:"id"`
 	Name        string  `json:"name"`
 	Description *string `json:"description,omitempty"`
-	PriceCents  int64   `json:"price_cents"`
+	PriceCents  *int64  `json:"price_cents"`
 	Currency    string  `json:"currency"`
 	IsActive    bool    `json:"is_active"`
 	CreatedAt   string  `json:"created_at"`
 }
 
+// PriceCents omitted or explicit null means "price on request" — see
+// entity.Product's doc comment. If present, it must still be a positive
+// amount; "min=1" only applies when the field is set (omitempty).
 type CreateProductRequest struct {
 	Name        string  `json:"name" binding:"required,min=1,max=200"`
 	Description *string `json:"description" binding:"omitempty,max=2000"`
-	PriceCents  int64   `json:"price_cents" binding:"required,min=1"`
+	PriceCents  *int64  `json:"price_cents" binding:"omitempty,min=1"`
 	Currency    string  `json:"currency" binding:"omitempty,len=3"`
 }
 
 type UpdateProductRequest struct {
 	Name        string  `json:"name" binding:"required,min=1,max=200"`
 	Description *string `json:"description" binding:"omitempty,max=2000"`
-	PriceCents  int64   `json:"price_cents" binding:"required,min=1"`
+	PriceCents  *int64  `json:"price_cents" binding:"omitempty,min=1"`
 	Currency    string  `json:"currency" binding:"omitempty,len=3"`
 	IsActive    bool    `json:"is_active"`
 }

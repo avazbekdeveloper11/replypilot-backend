@@ -296,7 +296,7 @@ type ProductModel struct {
 	OrganizationID uuid.UUID      `gorm:"column:organization_id;type:uuid"`
 	Name           string         `gorm:"column:name"`
 	Description    *string        `gorm:"column:description"`
-	PriceCents     int64          `gorm:"column:price_cents"`
+	PriceCents     *int64         `gorm:"column:price_cents"`
 	Currency       string         `gorm:"column:currency"`
 	IsActive       bool           `gorm:"column:is_active"`
 	CreatedAt      time.Time      `gorm:"column:created_at"`

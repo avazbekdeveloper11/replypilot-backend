@@ -201,7 +201,18 @@ func (uc *WebhookUseCase) handlePrepare(ctx context.Context, orgID uuid.UUID, re
 		resp.ErrorNote = "Order not found"
 		return resp
 	}
-	if !req.AmountMatches(product.PriceCents) {
+	// A price-on-request product (PriceCents == nil) never gets a Click
+	// payment link built for it in the first place — see
+	// ai.UseCase.buildProductContext — so a webhook naming one here means
+	// either a stale link from before the price was cleared, or a tampered
+	// transaction param. Either way, there's no valid amount to compare
+	// against or charge.
+	if product.PriceCents == nil {
+		resp.Error = clickapi.ErrOrderNotFound
+		resp.ErrorNote = "Order not found"
+		return resp
+	}
+	if !req.AmountMatches(*product.PriceCents) {
 		resp.Error = clickapi.ErrIncorrectAmount
 		resp.ErrorNote = "Incorrect parameter amount"
 		return resp
@@ -213,7 +224,7 @@ func (uc *WebhookUseCase) handlePrepare(ctx context.Context, orgID uuid.UUID, re
 		ConversationID:        conv.ID,
 		ProductID:             &product.ID,
 		ProductNameSnapshot:   product.Name,
-		AmountCents:           product.PriceCents,
+		AmountCents:           *product.PriceCents,
 		Currency:              product.Currency,
 		Status:                entity.OrderStatusPending,
 		ClickTransactionParam: req.MerchantTransID,
