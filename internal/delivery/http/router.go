@@ -40,6 +40,7 @@ type Handlers struct {
 	CommentAutomation *v1.CommentAutomationHandler
 	Campaign          *v1.CampaignHandler
 	Customer          *v1.CustomerHandler
+	AmoCRM            *v1.AmoCRMHandler
 }
 
 // Middlewares bundles the gin.HandlerFuncs that need constructed
@@ -125,6 +126,12 @@ func NewRouter(h Handlers, mw Middlewares) *gin.Engine {
 		instagramPublic := v1Group.Group("/instagram", mw.RateLimitByIP)
 		instagramPublic.GET("/callback", h.Instagram.Callback)
 
+		// Same reasoning as the Instagram callback above — amoCRM's OAuth
+		// redirect (or this app's frontend proxying it) hits this with no
+		// Authorization header. Safety comes from the CSRF `state` param.
+		amocrmPublic := v1Group.Group("/amocrm", mw.RateLimitByIP)
+		amocrmPublic.GET("/callback", h.AmoCRM.Callback)
+
 		protected := v1Group.Group("", mw.Auth, mw.RateLimitByOrg)
 		{
 			protected.GET("/organizations/me", h.Organization.Me)
@@ -188,6 +195,10 @@ func NewRouter(h Handlers, mw Middlewares) *gin.Engine {
 			protected.POST("/integrations/click/connect", h.Click.Connect)
 			protected.POST("/integrations/click/disconnect", h.Click.Disconnect)
 
+			protected.POST("/amocrm/connect", h.AmoCRM.Connect)
+			protected.GET("/integrations/amocrm", h.AmoCRM.Status)
+			protected.POST("/integrations/amocrm/disconnect", h.AmoCRM.Disconnect)
+
 			protected.GET("/integrations/comment-automation", h.CommentAutomation.Get)
 			protected.PUT("/integrations/comment-automation", h.CommentAutomation.Update)
 
@@ -196,6 +207,7 @@ func NewRouter(h Handlers, mw Middlewares) *gin.Engine {
 
 			protected.GET("/customers", h.Customer.List)
 			protected.GET("/customers/:conversation_id/orders", h.Customer.Orders)
+			protected.POST("/customers/:conversation_id/amocrm-sync", h.AmoCRM.Sync)
 
 			protected.GET("/leads", h.Lead.List)
 			protected.PATCH("/leads/:id", h.Lead.UpdateStatus)

@@ -28,6 +28,7 @@ type Config struct {
 	Security  SecurityConfig
 	RateLimit RateLimitConfig
 	Email     EmailConfig
+	AmoCRM    AmoCRMConfig
 }
 
 type AppConfig struct {
@@ -144,6 +145,26 @@ type EmailConfig struct {
 	FromEmail string
 }
 
+// AmoCRMConfig holds ReplyPilot's own platform-level amoCRM OAuth app
+// credentials (one integration, registered once at
+// amocrm.ru -> Settings -> Integrations -> Create integration — see
+// https://developers.kommo.com/docs/oauth-20#registration-of-an-integration),
+// shared across every org the same way Meta's app_id/app_secret are —
+// NOT a per-org value. Same "boots without it, individual calls fail
+// with a clear error" philosophy as GeminiConfig/StripeConfig, not
+// mustGetEnv: amoCRM is an optional bolt-on integration, not core to
+// the product the way Instagram is, so a deployment that never
+// configured it should still boot and serve everything else.
+type AmoCRMConfig struct {
+	ClientID     string
+	ClientSecret string
+	// RedirectURL points at the FRONTEND's OAuth callback page (same
+	// pattern as META_REDIRECT_URL — see that field's doc comment),
+	// which forwards code/state/referer to this API's own
+	// GET /v1/amocrm/callback.
+	RedirectURL string
+}
+
 // RateLimitConfig has one field, not a token-bucket burst/rate pair,
 // because middleware.RateLimiter implements a fixed-window counter (see
 // its doc comment for why that's the right tradeoff here). Add a Burst
@@ -218,6 +239,11 @@ func Load() (*Config, error) {
 		Email: EmailConfig{
 			ResendAPIKey: getEnv("RESEND_API_KEY", ""),
 			FromEmail:    getEnv("RESEND_FROM_EMAIL", ""),
+		},
+		AmoCRM: AmoCRMConfig{
+			ClientID:     getEnv("AMOCRM_CLIENT_ID", ""),
+			ClientSecret: getEnv("AMOCRM_CLIENT_SECRET", ""),
+			RedirectURL:  getEnv("AMOCRM_REDIRECT_URL", ""),
 		},
 	}
 

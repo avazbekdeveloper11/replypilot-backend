@@ -459,6 +459,29 @@ type InstagramAccountResponse struct {
 	Status   string  `json:"status"`
 }
 
+// AmoCRMConnectResponse mirrors InstagramConnectResponse — see that
+// type's doc comment, same shape.
+type AmoCRMConnectResponse struct {
+	AuthorizationURL string `json:"authorization_url"`
+	State            string `json:"state"`
+}
+
+// AmoCRMIntegrationResponse mirrors ClickIntegrationResponse's "one row
+// per org" shape, not InstagramAccountResponse's "list" shape — amoCRM
+// is a single connection per org, like Click.
+type AmoCRMIntegrationResponse struct {
+	Subdomain   string `json:"subdomain"`
+	Status      string `json:"status"`
+	ConnectedAt string `json:"connected_at"`
+}
+
+// AmoCRMSyncResponse mirrors entity.AmoCRMContactLink — what a
+// "Sync to amoCRM" click returns.
+type AmoCRMSyncResponse struct {
+	AmoCRMContactID int64  `json:"amocrm_contact_id"`
+	SyncedAt        string `json:"synced_at"`
+}
+
 type TelegramConnectRequest struct {
 	// BotToken is the string @BotFather gives back after /newbot — this
 	// codebase never generates one itself.

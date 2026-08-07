@@ -321,6 +321,36 @@ type ClickIntegrationModel struct {
 
 func (ClickIntegrationModel) TableName() string { return "click_integrations" }
 
+// AmoCRMIntegrationModel maps amocrm_integrations — see migration 000019
+// and entity.AmoCRMIntegration's doc comment.
+type AmoCRMIntegrationModel struct {
+	ID                    uuid.UUID      `gorm:"column:id;type:uuid;primaryKey"`
+	OrganizationID        uuid.UUID      `gorm:"column:organization_id;type:uuid"`
+	Subdomain             string         `gorm:"column:subdomain"`
+	AccessTokenEncrypted  []byte         `gorm:"column:access_token_encrypted"`
+	RefreshTokenEncrypted []byte         `gorm:"column:refresh_token_encrypted"`
+	AccessTokenExpiresAt  time.Time      `gorm:"column:access_token_expires_at"`
+	Status                string         `gorm:"column:status"`
+	ConnectedByUserID     *uuid.UUID     `gorm:"column:connected_by_user_id;type:uuid"`
+	CreatedAt             time.Time      `gorm:"column:created_at"`
+	UpdatedAt             time.Time      `gorm:"column:updated_at"`
+	DeletedAt             gorm.DeletedAt `gorm:"column:deleted_at;index"`
+}
+
+func (AmoCRMIntegrationModel) TableName() string { return "amocrm_integrations" }
+
+// AmoCRMContactLinkModel maps amocrm_contact_links — a composite-key
+// table (organization_id, conversation_id), no surrogate id column. See
+// entity.AmoCRMContactLink's doc comment.
+type AmoCRMContactLinkModel struct {
+	OrganizationID  uuid.UUID `gorm:"column:organization_id;type:uuid;primaryKey"`
+	ConversationID  uuid.UUID `gorm:"column:conversation_id;type:uuid;primaryKey"`
+	AmoCRMContactID int64     `gorm:"column:amocrm_contact_id"`
+	SyncedAt        time.Time `gorm:"column:synced_at"`
+}
+
+func (AmoCRMContactLinkModel) TableName() string { return "amocrm_contact_links" }
+
 // OrderModel maps to orders — see entity.Order's doc comment for what this
 // row represents and when it's created.
 type OrderModel struct {

@@ -25,6 +25,7 @@ import (
 	httpserver "github.com/replypilot/backend/internal/delivery/http"
 	"github.com/replypilot/backend/internal/delivery/http/middleware"
 	v1 "github.com/replypilot/backend/internal/delivery/http/v1"
+	"github.com/replypilot/backend/internal/integration/amocrmapi"
 	"github.com/replypilot/backend/internal/integration/geminiapi"
 	"github.com/replypilot/backend/internal/integration/metaapi"
 	"github.com/replypilot/backend/internal/integration/resendapi"
@@ -41,6 +42,7 @@ import (
 	authuc "github.com/replypilot/backend/internal/usecase/auth"
 	conversationuc "github.com/replypilot/backend/internal/usecase/conversation"
 	adminuc "github.com/replypilot/backend/internal/usecase/admin"
+	amocrmuc "github.com/replypilot/backend/internal/usecase/amocrm"
 	analyticsuc "github.com/replypilot/backend/internal/usecase/analytics"
 	billinguc "github.com/replypilot/backend/internal/usecase/billing"
 	campaignuc "github.com/replypilot/backend/internal/usecase/campaign"
@@ -142,6 +144,7 @@ func New(cfg *config.Config) (*Container, error) {
 	aiInsightsRepo := postgresrepo.NewAIInsightsRepository(db)
 	commentAutomationRepo := postgresrepo.NewCommentAutomationRepository(db)
 	customerRepo := postgresrepo.NewCustomerRepository(db)
+	amocrmRepo := postgresrepo.NewAmoCRMRepository(db)
 	refreshTokenStore := redisrepo.NewRefreshTokenStore(redisClient)
 	oauthStateStore := redisrepo.NewOAuthStateStore(redisClient)
 	otpStore := redisrepo.NewOTPStore(redisClient)
@@ -151,6 +154,7 @@ func New(cfg *config.Config) (*Container, error) {
 	geminiClient := geminiapi.NewClient(cfg.Gemini.APIKey)
 	stripeClient := stripeapi.NewClient(cfg.Stripe.SecretKey)
 	telegramClient := telegramapi.NewClient("")
+	amocrmClient := amocrmapi.NewClient(cfg.AmoCRM.ClientID, cfg.AmoCRM.ClientSecret, cfg.AmoCRM.RedirectURL)
 
 	// EmailSender: real delivery via Resend once RESEND_API_KEY is set,
 	// LogNotifier (logs instead of sending) otherwise — see EmailConfig's
@@ -210,6 +214,14 @@ func New(cfg *config.Config) (*Container, error) {
 	// concrete instance, several consumers" pattern as campaignUseCase
 	// above.
 	customerUseCase := customeruc.New(customerRepo, orderRepo, conversationRepo)
+	// oauthStateStore reused a third time here (Instagram, then nothing
+	// else until now) — see amocrmuc.StateStore's doc comment on why
+	// amoCRM doesn't get its own Redis-backed store type.
+	amocrmOAuthUseCase := amocrmuc.NewOAuthUseCase(amocrmRepo, amocrmClient, oauthStateStore, encryptor, cfg.AmoCRM.ClientID)
+	// conversationRepo and orderRepo passed once more here — same "one
+	// concrete instance, several consumers" pattern as customerUseCase
+	// above.
+	amocrmSyncUseCase := amocrmuc.NewSyncUseCase(amocrmRepo, amocrmClient, encryptor, conversationRepo, orderRepo)
 
 	// --- handlers ---
 	handlers := httpserver.Handlers{
@@ -235,6 +247,7 @@ func New(cfg *config.Config) (*Container, error) {
 		CommentAutomation: v1.NewCommentAutomationHandler(commentAutomationUseCase),
 		Campaign:          v1.NewCampaignHandler(campaignUseCase),
 		Customer:          v1.NewCustomerHandler(customerUseCase),
+		AmoCRM:            v1.NewAmoCRMHandler(amocrmOAuthUseCase, amocrmSyncUseCase),
 	}
 
 	// --- middlewares ---
